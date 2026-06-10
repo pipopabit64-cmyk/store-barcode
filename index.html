@@ -69,7 +69,8 @@ Quagga.init({
 
     decoder:{
         readers:[
-            "code_128_reader"
+            "code_128_reader",
+        "code_39_reader"
         ]
     }
 
@@ -90,36 +91,45 @@ function(err){
 
 let scanned = false;
 
-Quagga.onDetected(function(data){
+Quagga.onDetected(async function(data){
 
     if(scanned) return;
 
     scanned = true;
 
-    const barcode =
-        data.codeResult.code;
+    const barcode = data.codeResult.code;
 
-    const storeCode =
-        barcode.slice(0,7);
+    const storeCode = barcode.slice(0,7);
 
     const storeName =
         stores[storeCode] || "店舗不明";
 
-    document.getElementById("result")
-        .innerText = storeName;
-
     Quagga.stop();
 
-    setTimeout(() => {
+    try {
 
-        location.href =
-        "shortcuts://run-shortcut?name=店舗受信&input=text&text="
-        + encodeURIComponent(storeName);
+        await navigator.clipboard.writeText(storeName);
 
-    },1000);
+        document.getElementById("result").innerHTML =
+            `
+            ${storeName}
+            <br>
+            <small>クリップボードにコピーしました</small>
+            `;
+
+    } catch(err) {
+
+        document.getElementById("result").innerHTML =
+            `
+            ${storeName}
+            <br>
+            <small>コピー失敗</small>
+            `;
+
+        console.error(err);
+    }
 
 });
-
 </script>
 
 </body>
