@@ -3,73 +3,134 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>店舗コード読取</title>
-<!-- バージョンを固定（最新指定だと読み込めない場合がある） -->
+<title>店舗コード読取（連続スキャン）</title>
 <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
 <style>
-  body{ margin:0; font-family:sans-serif; }
+  body{ margin:0; font-family:sans-serif; -webkit-text-size-adjust:100%; }
   #scanner{
     width:100%;
-    height:70vh;
+    height:50vh;
     background:#000;
     position:relative;
     overflow:hidden;
   }
-  /* Quaggaが挿入するvideo/canvasをコンテナに収める */
   #scanner video,
   #scanner canvas{
     width:100% !important;
     height:100% !important;
     object-fit:cover;
   }
-  #result{
-    font-size:32px;
-    padding:20px;
+  /* 起動前のタップ用オーバーレイ */
+  #startOverlay{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    background:#000; color:#fff; font-size:24px;
+    z-index:10;
   }
-  .error{ color:#c00; font-size:20px; }
+  /* スキャン成功時の緑フラッシュ */
+  #flash{
+    position:absolute; inset:0; background:#0f0; opacity:0;
+    pointer-events:none; z-index:5;
+  }
+  #flash.on{ opacity:0.35; }
+  #result{ font-size:22px; padding:10px 14px; }
+  .error{ color:#c00; font-size:18px; }
+  #bar{ display:flex; gap:8px; padding:0 14px 10px; }
+  #bar button{
+    flex:1; font-size:18px; padding:14px 0; border:none; border-radius:8px;
+    color:#fff;
+  }
+  #sendBtn{ background:#0a7; }
+  #clearBtn{ background:#999; }
+  #count{ padding:0 14px; font-size:16px; color:#555; }
+  #list{ list-style:none; margin:0; padding:0 14px 24px; }
+  #list li{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:10px 8px; border-bottom:1px solid #eee; font-size:18px;
+  }
+  #list .del{
+    color:#c00; padding:4px 12px; font-size:16px;
+  }
 </style>
 </head>
 <body>
-<div id="scanner"></div>
-<div id="result">読み取り待機中...</div>
+<div id="scanner">
+  <div id="flash"></div>
+  <div id="startOverlay">タップしてスキャン開始</div>
+</div>
+<div id="result">準備中...</div>
+<div id="bar">
+  <button id="sendBtn">まとめて送信</button>
+  <button id="clearBtn">クリア</button>
+</div>
+<div id="count">読取件数: 0</div>
+<ul id="list"></ul>
 
 <script>
-const resultEl = document.getElementById("result");
+const resultEl  = document.getElementById("result");
+const flashEl   = document.getElementById("flash");
+const listEl    = document.getElementById("list");
+const countEl   = document.getElementById("count");
+const overlayEl = document.getElementById("startOverlay");
 
 function showMsg(text, isError){
   resultEl.innerText = text;
   resultEl.className = isError ? "error" : "";
 }
 
-let stores = {};
-let scanned = false;
+let stores  = {};
+let results = [];      // 読み取り結果の配列 {text, name}
+let scanned = false;   // クールダウン中フラグ
+let started = false;
 
-// HTTPSチェック（カメラはhttpsかlocalhostでないと起動しない）
+// ---- 設定値 ----
+const REQUIRED_MATCH = 2;     // 同じコードを連続2回読めたら確定
+const MAX_ERROR      = 0.15;  // デコード誤差の許容上限（小さいほど厳しい）
+const COOLDOWN       = 1200;  // 確定後、次を読むまでの待ち時間(ms)。同一コードの重複読みも防止
+
+// HTTPSチェック
 if(location.protocol !== "https:" && location.hostname !== "localhost"){
-  showMsg("カメラはhttps接続でないと起動しません。\nhttpsのURLで開いてください。", true);
+  showMsg("カメラはhttps接続でないと起動しません。httpsのURLで開いてください。", true);
 }
-
-// Quaggaが読み込めているか確認
 if(typeof Quagga === "undefined"){
   showMsg("スキャナーライブラリの読み込みに失敗しました（通信環境を確認）。", true);
 }
 
-// stores.json を読み込む。失敗してもスキャナーは起動させる
+// stores.json 読み込み（失敗してもスキャンは続行）
 fetch("./stores.json")
-  .then(r => {
-    if(!r.ok) throw new Error("stores.json HTTP " + r.status);
-    return r.json();
-  })
+  .then(r => { if(!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
   .then(data => { stores = data; })
-  .catch(err => {
-    console.log("stores.json読み込み失敗:", err);
-    // 店舗名は不明になるが、スキャン自体は続行
-  })
-  .finally(() => {
-    if(typeof Quagga !== "undefined"){
-      startScanner();
-    }
-  });
+  .catch(err => { console.log("stores.json読み込み失敗:", err); })
+  .finally(() => { showMsg("タップしてスキャン開始"); });
+
+// ---- 音（スキャン確認音）。iOS対策で開始タップ時に有効化 ----
+let audioCtx = null;
+function unlockAudio(){
+  try{ audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){}
+}
+function beep(){
+  if(!audioCtx) return;
+  try{
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.connect(g); g.connect(audioCtx.destination);
+    o.frequency.value = 880; g.gain.value = 0.12;
+    o.start(); o.stop(audioCtx.currentTime + 0.08);
+  }catch(e){}
+}
+function flash(){
+  flashEl.classList.add("on");
+  setTimeout(() => flashEl.classList.remove("on"), 150);
+}
+
+// ---- 開始（タップ起点。ユーザー操作起点だと許可が安定する）----
+overlayEl.addEventListener("click", () => {
+  if(started || typeof Quagga === "undefined") return;
+  started = true;
+  unlockAudio();
+  overlayEl.style.display = "none";
+  startScanner();
+});
 
 function startScanner(){
   Quagga.init({
@@ -77,26 +138,22 @@ function startScanner(){
       name:"Live",
       type:"LiveStream",
       target: document.querySelector("#scanner"),
-      constraints:{
-        facingMode:"environment",
-        width:{ ideal:1280 },
-        height:{ ideal:720 }
-      }
+      constraints:{ facingMode:"environment", width:{ ideal:1280 }, height:{ ideal:720 } }
     },
     locator:{ patchSize:"medium", halfSample:true },
     numOfWorkers: navigator.hardwareConcurrency || 2,
     frequency:10,
     decoder:{
       readers:[
-        "code_128_reader",   // CODE128
-        "code_39_reader",    // CODE39
-        "code_93_reader",    // CODE93
-        "ean_reader",        // EAN-13 / JAN
-        "ean_8_reader",      // EAN-8
-        "upc_reader",        // UPC-A
-        "upc_e_reader",      // UPC-E
-        "codabar_reader",    // Codabar(NW-7)
-        "i2of5_reader"       // Interleaved 2 of 5(ITF)
+        "code_128_reader",
+        "code_39_reader",
+        "code_93_reader",
+        "ean_reader",
+        "ean_8_reader",
+        "upc_reader",
+        "upc_e_reader",
+        "codabar_reader",
+        "i2of5_reader"
       ]
     },
     locate:true
@@ -104,75 +161,89 @@ function startScanner(){
   function(err){
     if(err){
       console.log(err);
-      // カメラ起動失敗の原因を画面に表示
       showMsg("カメラを起動できません: " + (err.name || err.message || err), true);
       return;
     }
-    // iOS対策：videoにplaysinlineを付与
     const video = document.querySelector("#scanner video");
-    if(video){
-      video.setAttribute("playsinline", "true");
-      video.setAttribute("muted", "true");
-    }
+    if(video){ video.setAttribute("playsinline","true"); video.setAttribute("muted","true"); }
     Quagga.start();
     showMsg("読み取り待機中...");
   });
 
-  // onDetected は init成功後に登録（Quagga読み込み前の登録を避ける）
   Quagga.onDetected(onDetected);
 }
 
-// 連続一致チェック用
 let lastCode = null;
 let matchCount = 0;
-const REQUIRED_MATCH = 2;   // 同じコードを連続2回読めたら確定
-const MAX_ERROR = 0.15;     // デコード誤差の許容上限（小さいほど厳しい）
 
 function onDetected(data){
-  if(scanned) return;
+  if(scanned) return;  // クールダウン中は無視
 
   const result = data.codeResult;
   const barcode = result && result.code;
   if(!barcode) return;
 
-  // 1) 読み取り誤差をチェック（ピンボケ・歪みの誤読を除外）
+  // 誤差チェック
   const codes = result.decodedCodes || [];
   const errs = codes.map(c => c.error).filter(e => typeof e === "number");
   if(errs.length){
-    const avgErr = errs.reduce((a, b) => a + b, 0) / errs.length;
-    if(avgErr > MAX_ERROR) return;   // 信頼できないので無視
+    const avgErr = errs.reduce((a,b) => a+b, 0) / errs.length;
+    if(avgErr > MAX_ERROR) return;
   }
 
-  // 2) 連続一致チェック（一瞬の誤読を除外）
-  if(barcode === lastCode){
-    matchCount++;
-  }else{
-    lastCode = barcode;
-    matchCount = 1;
-    return;
-  }
+  // 連続一致チェック
+  if(barcode === lastCode){ matchCount++; }
+  else { lastCode = barcode; matchCount = 1; return; }
   if(matchCount < REQUIRED_MATCH) return;
 
-  // ここで確定
+  // 確定（カメラは止めない。クールダウンだけ入れて連続読み取り）
+  const text = barcode.replace(/[^0-9]/g, "");   // 数字だけ抽出
+  const storeName = stores[text.slice(0,7)] || "店舗不明";
+
+  addResult(text, storeName);
+  beep();
+  flash();
+  if(navigator.vibrate) navigator.vibrate(60);
+  showMsg("読取: " + storeName + " / " + text);
+
   scanned = true;
-  Quagga.offDetected(onDetected);
-  Quagga.stop();
-
-  // テキストデータ（バーコードの生の文字列）
-  const raw = barcode;                        // 生の読み取り値（例: C153023200000C）
-  const text = raw.replace(/[^0-9]/g, "");    // 数字だけ抽出（例: 153023200000）
-  const storeCode = text.slice(0, 7);
-  const storeName = stores[storeCode] || "店舗不明";
-
-  showMsg(storeName + "\n" + text);
-
-  setTimeout(() => {
-    // ショートカットへ店舗名を渡す（生テキストを渡したい場合は storeName を text に変更）
-    location.href =
-      "shortcuts://run-shortcut?name=店舗受信&input=text&text="
-      + encodeURIComponent(storeName);
-  }, 1000);
+  setTimeout(() => { scanned = false; lastCode = null; matchCount = 0; }, COOLDOWN);
 }
+
+function addResult(text, name){
+  results.push({ text, name });
+  renderList();
+}
+
+function renderList(){
+  countEl.innerText = "読取件数: " + results.length;
+  listEl.innerHTML = "";
+  results.forEach((r, i) => {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.innerText = (i+1) + ". " + r.name + " / " + r.text;
+    const del = document.createElement("span");
+    del.innerText = "削除";
+    del.className = "del";
+    del.addEventListener("click", () => { results.splice(i,1); renderList(); });
+    li.appendChild(span); li.appendChild(del);
+    listEl.appendChild(li);
+  });
+}
+
+// まとめて送信（改行区切りで1回だけショートカットへ渡す）
+document.getElementById("sendBtn").addEventListener("click", () => {
+  if(!results.length){ showMsg("送信するデータがありません", true); return; }
+  // コード(数字)を渡す。店舗名を渡したい場合は r.text を r.name に変更
+  const payload = results.map(r => r.text).join("\n");
+  location.href =
+    "shortcuts://run-shortcut?name=店舗受信&input=text&text=" + encodeURIComponent(payload);
+});
+
+document.getElementById("clearBtn").addEventListener("click", () => {
+  if(results.length && !confirm("読取結果をすべて消去しますか？")) return;
+  results = []; renderList(); showMsg("読み取り待機中...");
+});
 </script>
 </body>
 </html>
