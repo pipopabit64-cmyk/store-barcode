@@ -42,7 +42,6 @@
 <!-- STEP1: 対象店舗の設定 -->
 <div class="box">
   <h2>① 対象店舗を設定</h2>
-  <button class="btn-main" id="clipBtn">クリップボードから対象店舗を読み取る</button>
   <div id="target">対象店舗: 未設定</div>
   <div id="status"></div>
   <div style="margin-top:10px;">
@@ -74,7 +73,6 @@ const STORE_LIST = [
   "新潟駅前","仙台","札幌","郡山","宇都宮","梅田","京都","博多","甲府","池袋"
 ];
 
-const clipBtn  = document.getElementById("clipBtn");
 const targetEl = document.getElementById("target");
 const statusEl = document.getElementById("status");
 const manual   = document.getElementById("manualSelect");
@@ -123,32 +121,7 @@ function pulse(){ verdict.classList.remove("pulse"); void verdict.offsetWidth; v
 function feedbackOK(){ tone(1046,0.14); flash(); pulse(); if(navigator.vibrate) navigator.vibrate(120); }
 function feedbackNG(){ tone(392,0.16); setTimeout(()=>tone(392,0.16),200); flash(); pulse(); if(navigator.vibrate) navigator.vibrate([120,90,120]); }
 
-/* ===== STEP1: クリップボードから対象店舗を設定 ===== */
-clipBtn.addEventListener("click", async () => {
-  unlockAudio();
-  if(!navigator.clipboard || !navigator.clipboard.readText){
-    statusEl.textContent = "この端末ではクリップボード読み取りに非対応です。手動選択を使ってください。";
-    return;
-  }
-  try{
-    const text = await navigator.clipboard.readText();
-    if(!text || !text.trim()){
-      statusEl.textContent = "クリップボードが空です。店名をコピーしてから押してください。";
-      return;
-    }
-    const store = matchStore(text);
-    if(store){
-      setTarget(store);
-      statusEl.textContent = "クリップボードから「" + store + "」を検出";
-    }else{
-      statusEl.textContent = "店名を判定できませんでした。手動選択してください。\n[内容] " + text.replace(/\s+/g," ").slice(0,150);
-    }
-  }catch(e){
-    console.log(e);
-    statusEl.textContent = "クリップボードを読み取れませんでした（許可されなかった可能性）。手動選択を使ってください。";
-  }
-});
-
+/* ===== STEP1: 店名照合（URLパラメータ・手動選択で使用） ===== */
 /* 店名照合：完全包含 → あいまい一致（部分列一致率） */
 function matchStore(rawText){
   const clean = rawText.replace(/\s/g,"");
@@ -244,6 +217,22 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   verdict.textContent="―"; verdict.className="";
   overlay.style.display="flex"; scanInfo.textContent="待機中"; statusEl.textContent="";
 });
+
+/* ===== iOSショートカット等からURLパラメータで対象店舗を受け取る =====
+   例: https://<ドメイン>/dp-verify.html?store=新宿西口本
+   store でも text でも可。テキストを渡せば店リストと照合して判定する。 */
+(function initFromURL(){
+  const params = new URLSearchParams(location.search);
+  const incoming = params.get("store") || params.get("text");
+  if(!incoming) return;
+  const store = matchStore(incoming);
+  if(store){
+    setTarget(store);
+    statusEl.textContent = "ショートカットから「" + store + "」を受け取りました";
+  }else{
+    statusEl.textContent = "受け取ったテキストから店名を判定できませんでした。手動選択してください。\n[内容] " + incoming.replace(/\s+/g," ").slice(0,150);
+  }
+})();
 </script>
 </body>
 </html>
