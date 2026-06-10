@@ -42,26 +42,24 @@ import {
 }
 from "https://cdn.jsdelivr.net/npm/@zxing/browser@latest/+esm";
 
-const codeReader =
- new BrowserMultiFormatReader();
+const codeReader = new BrowserMultiFormatReader();
 
-try{
-
- await codeReader.decodeFromVideoDevice(
+await codeReader.decodeFromVideoDevice(
   undefined,
   "video",
+  (result, error) => {
 
-  (result,error)=>{
+    if(result){
 
-   if(result){
+      console.log(result.getText());
 
-    document.getElementById("result")
-      .innerHTML =
-      result.getText();
+      document.getElementById("result").innerHTML =
+        result.getText();
 
-   }
+    }
 
-  });
+  }
+);
 
 }
 catch(ex){
