@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="UTF-8">
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
+<title>店舗コード読取</title>
+
+<script src="https://unpkg.com/@ericblade/quagga2/dist/quagga.min.js"></script>
+
+<style>
+
+body{
+margin:0;
+font-family:sans-serif;
+}
+
+#scanner{
+width:100%;
+height:70vh;
+}
+
+#result{
+font-size:32px;
+padding:20px;
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div id="scanner"></div>
+
+<div id="result">
+読み取り待機中...
+</div>
+
+<script>
+
+let stores = {};
+
+fetch("./stores.json")
+.then(r => r.json())
+.then(data => {
+
+    stores = data;
+
+    startScanner();
+
+});
+
+function startScanner(){
+
+Quagga.init({
+
+    inputStream:{
+        type:"LiveStream",
+        target:
+        document.querySelector("#scanner"),
+
+        constraints:{
+            facingMode:"environment"
+        }
+    },
+
+    decoder:{
+        readers:[
+            "code_128_reader"
+        ]
+    }
+
+},
+
+function(err){
+
+    if(err){
+
+        console.log(err);
+        return;
+    }
+
+    Quagga.start();
+});
+
+}
+
+let scanned = false;
+
+Quagga.onDetected(function(data){
+
+    if(scanned) return;
+
+    scanned = true;
+
+    const barcode =
+        data.codeResult.code;
+
+    const storeCode =
+        barcode.slice(0,7);
+
+    const storeName =
+        stores[storeCode] || "店舗不明";
+
+    document.getElementById("result")
+        .innerText = storeName;
+
+    Quagga.stop();
+
+    setTimeout(() => {
+
+        location.href =
+        "shortcuts://run-shortcut?name=店舗受信&input=text&text="
+        + encodeURIComponent(storeName);
+
+    },1000);
+
+});
+
+</script>
+
+</body>
+
+</html>
