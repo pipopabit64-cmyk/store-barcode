@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>宅配伝票 × DP袋 照合</title>
+<title>クリップボード × DP袋 照合</title>
 <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <style>
   body{ margin:0; font-family:sans-serif; -webkit-text-size-adjust:100%; color:#222; }
   .box{ padding:12px 14px; border-bottom:8px solid #f0f0f0; }
@@ -15,12 +14,9 @@
   .btn-sub{ background:#999; }
   select{ font-size:18px; padding:10px; width:100%; box-sizing:border-box; }
   #target{ font-size:26px; font-weight:bold; margin:10px 0; }
-  #ocrStatus{ font-size:14px; color:#888; white-space:pre-wrap; }
+  #status{ font-size:14px; color:#888; white-space:pre-wrap; }
 
-  #verdict{
-    font-size:72px; font-weight:bold; text-align:center;
-    padding:20px 0; color:#bbb; transition:none;
-  }
+  #verdict{ font-size:72px; font-weight:bold; text-align:center; padding:20px 0; color:#bbb; }
   #verdict.ok{ background:#0a0; color:#fff; }
   #verdict.ng{ background:#c00; color:#fff; }
   #verdict.pulse{ animation:pulse .35s ease-out; }
@@ -28,10 +24,8 @@
 
   #scanner{ width:100%; height:42vh; background:#000; position:relative; overflow:hidden; }
   #scanner video, #scanner canvas{ width:100% !important; height:100% !important; object-fit:cover; }
-  /* 読取ガイド枠（中央帯） */
   #guide{ position:absolute; left:8%; right:8%; top:35%; bottom:35%;
     border:3px solid rgba(255,255,255,.8); border-radius:8px; z-index:4; pointer-events:none; }
-  /* 読取フラッシュ */
   #flash{ position:absolute; inset:0; background:#fff; opacity:0; z-index:5; pointer-events:none; }
   #flash.on{ opacity:.6; }
 
@@ -40,21 +34,19 @@
   #log li{ display:flex; justify-content:space-between; padding:8px 4px; border-bottom:1px solid #eee; font-size:16px; }
   .tag-ok{ color:#0a0; font-weight:bold; }
   .tag-ng{ color:#c00; font-weight:bold; }
-  .hidden{ display:none; }
   .note{ font-size:13px; color:#999; }
 </style>
 </head>
 <body>
 
-<!-- STEP1: 宅配伝票OCR -->
+<!-- STEP1: 対象店舗の設定 -->
 <div class="box">
-  <h2>① 宅配伝票をスキャン（OCR）</h2>
-  <button class="btn-main" id="ocrBtn">宅配伝票を撮影して店名を読み取る</button>
-  <input type="file" id="ocrFile" accept="image/*" capture="environment" class="hidden">
+  <h2>① 対象店舗を設定</h2>
+  <button class="btn-main" id="clipBtn">クリップボードから対象店舗を読み取る</button>
   <div id="target">対象店舗: 未設定</div>
-  <div id="ocrStatus"></div>
+  <div id="status"></div>
   <div style="margin-top:10px;">
-    <span class="note">自動で取れない時は手動選択：</span>
+    <span class="note">手動で選択：</span>
     <select id="manualSelect"><option value="">― 店舗を選択 ―</option></select>
   </div>
 </div>
@@ -66,26 +58,25 @@
   <div id="scanner">
     <div id="guide"></div>
     <div id="flash"></div>
-    <div id="overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#fff;font-size:18px;z-index:10;">先に宅配伝票を読み取ってください</div>
+    <div id="overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#fff;font-size:18px;z-index:10;">先に対象店舗を設定してください</div>
   </div>
   <div id="scanInfo">待機中</div>
-  <button class="btn-sub" id="resetBtn" style="width:100%;margin-top:8px;">新しい宅配伝票を読み取る（リセット）</button>
+  <button class="btn-sub" id="resetBtn" style="width:100%;margin-top:8px;">リセット（対象店舗を再設定）</button>
 </div>
 
 <ul id="log"></ul>
 
 <script>
-/* ===== 店リスト（OCR照合用） ===== */
+/* ===== 店リスト ===== */
 const STORE_LIST = [
   "新宿西口本","新宿東口","吉祥寺","さいたま新都心駅前","上野","Akiba",
   "錦糸町","千葉","横浜","京急上大岡","川崎ルフロン","町田","八王子店",
   "新潟駅前","仙台","札幌","郡山","宇都宮","梅田","京都","博多","甲府","池袋"
 ];
 
-const ocrBtn   = document.getElementById("ocrBtn");
-const ocrFile  = document.getElementById("ocrFile");
+const clipBtn  = document.getElementById("clipBtn");
 const targetEl = document.getElementById("target");
-const ocrStat  = document.getElementById("ocrStatus");
+const statusEl = document.getElementById("status");
 const manual   = document.getElementById("manualSelect");
 const verdict  = document.getElementById("verdict");
 const overlay  = document.getElementById("overlay");
@@ -107,7 +98,7 @@ fetch("./stores.json")
   .then(d => { stores = d; })
   .catch(e => console.log("stores.json読み込み失敗:", e));
 
-/* ===== 音（最初のタップで必ず有効化。iOSはresumeが必要） ===== */
+/* ===== 音 ===== */
 let audioCtx = null;
 function unlockAudio(){
   try{
@@ -119,8 +110,7 @@ document.addEventListener("touchend", unlockAudio);
 document.addEventListener("click", unlockAudio);
 
 function tone(freq, dur){
-  unlockAudio();
-  if(!audioCtx) return;
+  unlockAudio(); if(!audioCtx) return;
   try{
     const o=audioCtx.createOscillator(), g=audioCtx.createGain();
     o.connect(g); g.connect(audioCtx.destination);
@@ -133,68 +123,37 @@ function pulse(){ verdict.classList.remove("pulse"); void verdict.offsetWidth; v
 function feedbackOK(){ tone(1046,0.14); flash(); pulse(); if(navigator.vibrate) navigator.vibrate(120); }
 function feedbackNG(){ tone(392,0.16); setTimeout(()=>tone(392,0.16),200); flash(); pulse(); if(navigator.vibrate) navigator.vibrate([120,90,120]); }
 
-/* ===== STEP1: OCR ===== */
-ocrBtn.addEventListener("click", () => { unlockAudio(); ocrFile.click(); });
-
-ocrFile.addEventListener("change", async () => {
-  const file = ocrFile.files[0];
-  if(!file) return;
-  if(typeof Tesseract === "undefined"){ ocrStat.textContent="OCRライブラリ未読込（通信環境を確認）。手動選択を使ってください。"; return; }
-  ocrStat.textContent = "画像を準備中...";
+/* ===== STEP1: クリップボードから対象店舗を設定 ===== */
+clipBtn.addEventListener("click", async () => {
+  unlockAudio();
+  if(!navigator.clipboard || !navigator.clipboard.readText){
+    statusEl.textContent = "この端末ではクリップボード読み取りに非対応です。手動選択を使ってください。";
+    return;
+  }
   try{
-    const canvas = await preprocess(file);     // 拡大＋グレースケール＋コントラスト
-    const worker = await getWorker();
-    ocrStat.textContent = "認識中...";
-    const { data } = await worker.recognize(canvas);
-    const raw = (data.text || "");
-    const store = matchStore(raw);             // あいまい一致
+    const text = await navigator.clipboard.readText();
+    if(!text || !text.trim()){
+      statusEl.textContent = "クリップボードが空です。店名をコピーしてから押してください。";
+      return;
+    }
+    const store = matchStore(text);
     if(store){
       setTarget(store);
-      ocrStat.textContent = "「" + store + "」を検出";
+      statusEl.textContent = "クリップボードから「" + store + "」を検出";
     }else{
-      ocrStat.textContent = "店名を自動検出できませんでした。手動選択してください。\n[OCR結果] " + raw.replace(/\s+/g," ").slice(0,150);
+      statusEl.textContent = "店名を判定できませんでした。手動選択してください。\n[内容] " + text.replace(/\s+/g," ").slice(0,150);
     }
   }catch(e){
     console.log(e);
-    ocrStat.textContent = "OCRエラー: " + (e.message||e) + "\n手動で選択してください。";
-  }finally{ ocrFile.value=""; }
+    statusEl.textContent = "クリップボードを読み取れませんでした（許可されなかった可能性）。手動選択を使ってください。";
+  }
 });
-
-/* 画像前処理：小さければ拡大し、グレースケール＋コントラスト強調 */
-function preprocess(file){
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      let scale = 1;
-      if(img.width < 1000) scale = 1400 / img.width;       // 小さい写真は拡大
-      else if(img.width > 2000) scale = 2000 / img.width;  // 大きすぎる写真は縮小
-      const w = Math.round(img.width*scale), h = Math.round(img.height*scale);
-      const c = document.createElement("canvas"); c.width=w; c.height=h;
-      const ctx = c.getContext("2d");
-      ctx.drawImage(img,0,0,w,h);
-      const id = ctx.getImageData(0,0,w,h), d = id.data;
-      const contrast = 1.5;
-      for(let i=0;i<d.length;i+=4){
-        let g = 0.3*d[i]+0.59*d[i+1]+0.11*d[i+2];
-        g = (g-128)*contrast + 128;
-        g = g<0?0:(g>255?255:g);
-        d[i]=d[i+1]=d[i+2]=g;
-      }
-      ctx.putImageData(id,0,0);
-      URL.revokeObjectURL(img.src);
-      resolve(c);
-    };
-    img.onerror = reject;
-    img.src = URL.createObjectURL(file);
-  });
-}
 
 /* 店名照合：完全包含 → あいまい一致（部分列一致率） */
 function matchStore(rawText){
   const clean = rawText.replace(/\s/g,"");
   const exact = STORE_LIST.filter(s => clean.includes(s)).sort((a,b)=>b.length-a.length);
   if(exact.length) return exact[0];
-  // あいまい：店名の文字が順番に何割含まれるか
   let best=null, bestScore=0;
   for(const s of STORE_LIST){
     let i=0, found=0;
@@ -202,24 +161,16 @@ function matchStore(rawText){
     const score = found / s.length;
     if(score > bestScore){ bestScore=score; best=s; }
   }
-  return bestScore >= 0.7 ? best : null;   // 7割以上一致で採用
+  return bestScore >= 0.7 ? best : null;
 }
 
-let ocrWorker = null;
-async function getWorker(){
-  if(ocrWorker) return ocrWorker;
-  ocrWorker = await Tesseract.createWorker("jpn+eng", 1, {
-    logger: m => { if(m.status==="recognizing text") ocrStat.textContent = "認識中... " + Math.round(m.progress*100) + "%"; }
-  });
-  await ocrWorker.setParameters({ tessedit_pageseg_mode: "3" }); // 自動レイアウト解析
-  return ocrWorker;
-}
-
+/* 手動選択 */
 manual.addEventListener("change", () => { if(manual.value) setTarget(manual.value); });
 
 function setTarget(name){
   targetStore = name;
   targetEl.textContent = "対象店舗: " + name;
+  manual.value = name;
   overlay.style.display = "none";
   verdict.textContent = "―"; verdict.className = "";
   scanInfo.textContent = "DP袋を枠内に映してください";
@@ -234,13 +185,12 @@ function startScanner(){
     inputStream:{
       name:"Live", type:"LiveStream", target:document.querySelector("#scanner"),
       constraints:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:720} },
-      area:{ top:"35%", bottom:"35%", left:"8%", right:"8%" }   // 中央帯だけ処理＝高速化
+      area:{ top:"35%", bottom:"35%", left:"8%", right:"8%" }
     },
     locator:{ patchSize:"medium", halfSample:true },
     numOfWorkers: navigator.hardwareConcurrency || 4,
-    /* frequency 指定なし＝毎フレーム処理（高速） */
     decoder:{ readers:[
-      "codabar_reader",    // DP袋（NW-7）。これが主。下2つは予備
+      "codabar_reader",    // DP袋（NW-7）が主。下2行は予備。Codabarのみなら削除で更に高速化
       "code_128_reader",
       "code_39_reader"
     ]},
@@ -292,7 +242,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   targetStore=null; lastCode=null; matchCount=0; scanned=false;
   targetEl.textContent="対象店舗: 未設定"; manual.value="";
   verdict.textContent="―"; verdict.className="";
-  overlay.style.display="flex"; scanInfo.textContent="待機中"; ocrStat.textContent="";
+  overlay.style.display="flex"; scanInfo.textContent="待機中"; statusEl.textContent="";
 });
 </script>
 </body>
