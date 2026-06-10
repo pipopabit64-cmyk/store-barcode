@@ -3,12 +3,33 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Barcode Test</title>
+
+<title>Code128 Reader</title>
+
+<style>
+body{
+    font-family:sans-serif;
+    text-align:center;
+}
+
+video{
+    width:100%;
+    max-width:600px;
+}
+
+#result{
+    margin-top:20px;
+    font-size:24px;
+}
+</style>
+
 </head>
 
 <body>
 
-<video id="video" width="100%" playsinline></video>
+<h2>バーコード読取</h2>
+
+<video id="video" playsinline></video>
 
 <div id="result">
 スキャン待機中...
@@ -17,31 +38,39 @@
 <script type="module">
 
 import {
-  BrowserMultiFormatReader
+ BrowserMultiFormatReader
 }
-from "https://cdn.jsdelivr.net/npm/@zxing/browser@0.1.5/+esm";
+from "https://cdn.jsdelivr.net/npm/@zxing/browser@latest/+esm";
 
-const reader =
-  new BrowserMultiFormatReader();
+const codeReader =
+ new BrowserMultiFormatReader();
 
-reader.decodeFromVideoDevice(
+try{
+
+ await codeReader.decodeFromVideoDevice(
   undefined,
   "video",
-  (result, error) => {
 
-    if(result){
+  (result,error)=>{
 
-      document.getElementById("result")
-        .innerHTML =
-        "読取成功<br>" +
-        result.getText();
+   if(result){
 
-      reader.reset();
+    document.getElementById("result")
+      .innerHTML =
+      result.getText();
 
-    }
+   }
 
-  }
-);
+  });
+
+}
+catch(ex){
+
+ document.getElementById("result")
+   .innerHTML =
+   ex.message;
+
+}
 
 </script>
 
