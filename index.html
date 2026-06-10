@@ -122,21 +122,51 @@ function startScanner(){
   Quagga.onDetected(onDetected);
 }
 
+// 連続一致チェック用
+let lastCode = null;
+let matchCount = 0;
+const REQUIRED_MATCH = 2;   // 同じコードを連続2回読めたら確定
+const MAX_ERROR = 0.15;     // デコード誤差の許容上限（小さいほど厳しい）
+
 function onDetected(data){
   if(scanned) return;
-  const barcode = data.codeResult.code;
+
+  const result = data.codeResult;
+  const barcode = result && result.code;
   if(!barcode) return;
 
+  // 1) 読み取り誤差をチェック（ピンボケ・歪みの誤読を除外）
+  const codes = result.decodedCodes || [];
+  const errs = codes.map(c => c.error).filter(e => typeof e === "number");
+  if(errs.length){
+    const avgErr = errs.reduce((a, b) => a + b, 0) / errs.length;
+    if(avgErr > MAX_ERROR) return;   // 信頼できないので無視
+  }
+
+  // 2) 連続一致チェック（一瞬の誤読を除外）
+  if(barcode === lastCode){
+    matchCount++;
+  }else{
+    lastCode = barcode;
+    matchCount = 1;
+    return;
+  }
+  if(matchCount < REQUIRED_MATCH) return;
+
+  // ここで確定
   scanned = true;
-  const storeCode = barcode.slice(0, 7);
-  const storeName = stores[storeCode] || "店舗不明";
-
-  showMsg(storeName + "（" + barcode + "）");
-
   Quagga.offDetected(onDetected);
   Quagga.stop();
 
+  // テキストデータ（バーコードの生の文字列）
+  const text = barcode;
+  const storeCode = text.slice(0, 7);
+  const storeName = stores[storeCode] || "店舗不明";
+
+  showMsg(storeName + "\n" + text);
+
   setTimeout(() => {
+    // ショートカットへ店舗名を渡す（生テキストを渡したい場合は storeName を text に変更）
     location.href =
       "shortcuts://run-shortcut?name=店舗受信&input=text&text="
       + encodeURIComponent(storeName);
