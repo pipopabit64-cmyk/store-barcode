@@ -86,7 +86,19 @@ function startScanner(){
     locator:{ patchSize:"medium", halfSample:true },
     numOfWorkers: navigator.hardwareConcurrency || 2,
     frequency:10,
-    decoder:{ readers:["code_128_reader"] },
+    decoder:{
+      readers:[
+        "code_128_reader",   // CODE128
+        "code_39_reader",    // CODE39
+        "code_93_reader",    // CODE93
+        "ean_reader",        // EAN-13 / JAN
+        "ean_8_reader",      // EAN-8
+        "upc_reader",        // UPC-A
+        "upc_e_reader",      // UPC-E
+        "codabar_reader",    // Codabar(NW-7)
+        "i2of5_reader"       // Interleaved 2 of 5(ITF)
+      ]
+    },
     locate:true
   },
   function(err){
