@@ -17,16 +17,23 @@
   #target{ font-size:26px; font-weight:bold; margin:10px 0; }
   #ocrStatus{ font-size:14px; color:#888; white-space:pre-wrap; }
 
-  /* 判定表示 */
   #verdict{
-    font-size:60px; font-weight:bold; text-align:center;
-    padding:24px 0; color:#999;
+    font-size:72px; font-weight:bold; text-align:center;
+    padding:20px 0; color:#bbb; transition:none;
   }
   #verdict.ok{ background:#0a0; color:#fff; }
   #verdict.ng{ background:#c00; color:#fff; }
+  #verdict.pulse{ animation:pulse .35s ease-out; }
+  @keyframes pulse{ 0%{ transform:scale(1.25);} 100%{ transform:scale(1);} }
 
   #scanner{ width:100%; height:42vh; background:#000; position:relative; overflow:hidden; }
   #scanner video, #scanner canvas{ width:100% !important; height:100% !important; object-fit:cover; }
+  /* 読取ガイド枠（中央帯） */
+  #guide{ position:absolute; left:8%; right:8%; top:35%; bottom:35%;
+    border:3px solid rgba(255,255,255,.8); border-radius:8px; z-index:4; pointer-events:none; }
+  /* 読取フラッシュ */
+  #flash{ position:absolute; inset:0; background:#fff; opacity:0; z-index:5; pointer-events:none; }
+  #flash.on{ opacity:.6; }
 
   #scanInfo{ font-size:16px; padding:8px 14px; color:#555; }
   #log{ list-style:none; margin:0; padding:0 14px 24px; }
@@ -53,10 +60,12 @@
 </div>
 
 <!-- STEP2: 判定 + バーコードスキャン -->
-<div class="box" id="scanSection">
+<div class="box">
   <h2>② DP袋バーコードをスキャン</h2>
   <div id="verdict">―</div>
   <div id="scanner">
+    <div id="guide"></div>
+    <div id="flash"></div>
     <div id="overlay" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#fff;font-size:18px;z-index:10;">先に宅配伝票を読み取ってください</div>
   </div>
   <div id="scanInfo">待機中</div>
@@ -73,7 +82,6 @@ const STORE_LIST = [
   "新潟駅前","仙台","札幌","郡山","宇都宮","梅田","京都","博多","甲府","池袋"
 ];
 
-/* ===== 要素 ===== */
 const ocrBtn   = document.getElementById("ocrBtn");
 const ocrFile  = document.getElementById("ocrFile");
 const targetEl = document.getElementById("target");
@@ -81,49 +89,49 @@ const ocrStat  = document.getElementById("ocrStatus");
 const manual   = document.getElementById("manualSelect");
 const verdict  = document.getElementById("verdict");
 const overlay  = document.getElementById("overlay");
+const flashEl  = document.getElementById("flash");
 const scanInfo = document.getElementById("scanInfo");
 const logEl    = document.getElementById("log");
 
-/* ===== 状態 ===== */
-let stores = {};          // バーコードコード -> 店名 (stores.json)
-let targetStore = null;   // 宅配伝票から特定した店名（変数）
+let stores = {};
+let targetStore = null;
 let scannerStarted = false;
-let scanned = false;      // クールダウン
+let scanned = false;
 let lastCode = null, matchCount = 0;
-const REQUIRED_MATCH = 2, MAX_ERROR = 0.15, COOLDOWN = 1500;
+const REQUIRED_MATCH = 2, MAX_ERROR = 0.18, COOLDOWN = 900;
 
-/* 手動選択肢を生成 */
-STORE_LIST.forEach(s => {
-  const o = document.createElement("option");
-  o.value = s; o.textContent = s; manual.appendChild(o);
-});
+STORE_LIST.forEach(s => { const o=document.createElement("option"); o.value=s; o.textContent=s; manual.appendChild(o); });
 
-/* stores.json（コード→店名）読み込み。失敗してもOCR/手動は使える */
 fetch("./stores.json")
   .then(r => { if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
   .then(d => { stores = d; })
   .catch(e => console.log("stores.json読み込み失敗:", e));
 
-/* ===== 音 ===== */
+/* ===== 音（最初のタップで必ず有効化。iOSはresumeが必要） ===== */
 let audioCtx = null;
-function unlockAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+function unlockAudio(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state === "suspended") audioCtx.resume();
+  }catch(e){}
+}
+document.addEventListener("touchend", unlockAudio);
+document.addEventListener("click", unlockAudio);
+
 function tone(freq, dur){
+  unlockAudio();
   if(!audioCtx) return;
   try{
     const o=audioCtx.createOscillator(), g=audioCtx.createGain();
     o.connect(g); g.connect(audioCtx.destination);
-    o.frequency.value=freq; g.gain.value=0.15;
+    o.type="square"; o.frequency.value=freq; g.gain.value=0.2;
     o.start(); o.stop(audioCtx.currentTime+dur);
   }catch(e){}
 }
-function feedbackOK(){
-  tone(1046, 0.15);                              // 高音1回
-  if(navigator.vibrate) navigator.vibrate(120);  // 振動1回（Androidのみ）
-}
-function feedbackNG(){
-  tone(440, 0.18); setTimeout(()=>tone(440,0.18), 220);   // 低音2回
-  if(navigator.vibrate) navigator.vibrate([120,100,120]); // 振動2回（Androidのみ）
-}
+function flash(){ flashEl.classList.add("on"); setTimeout(()=>flashEl.classList.remove("on"),120); }
+function pulse(){ verdict.classList.remove("pulse"); void verdict.offsetWidth; verdict.classList.add("pulse"); }
+function feedbackOK(){ tone(1046,0.14); flash(); pulse(); if(navigator.vibrate) navigator.vibrate(120); }
+function feedbackNG(){ tone(392,0.16); setTimeout(()=>tone(392,0.16),200); flash(); pulse(); if(navigator.vibrate) navigator.vibrate([120,90,120]); }
 
 /* ===== STEP1: OCR ===== */
 ocrBtn.addEventListener("click", () => { unlockAudio(); ocrFile.click(); });
@@ -131,69 +139,115 @@ ocrBtn.addEventListener("click", () => { unlockAudio(); ocrFile.click(); });
 ocrFile.addEventListener("change", async () => {
   const file = ocrFile.files[0];
   if(!file) return;
-  if(typeof Tesseract === "undefined"){ ocrStat.textContent = "OCRライブラリ未読込（通信環境を確認）。手動選択を使ってください。"; return; }
-  ocrStat.textContent = "認識中... (初回は言語データのDLで時間がかかります)";
+  if(typeof Tesseract === "undefined"){ ocrStat.textContent="OCRライブラリ未読込（通信環境を確認）。手動選択を使ってください。"; return; }
+  ocrStat.textContent = "画像を準備中...";
   try{
+    const canvas = await preprocess(file);     // 拡大＋グレースケール＋コントラスト
     const worker = await getWorker();
-    const { data } = await worker.recognize(file);
-    const raw = data.text || "";
-    const clean = raw.replace(/\s/g, "");
-    // 店リストに含まれる店名を検出（複数該当時は最長一致を採用）
-    const hits = STORE_LIST.filter(s => clean.includes(s)).sort((a,b)=>b.length-a.length);
-    if(hits.length){
-      setTarget(hits[0]);
-      ocrStat.textContent = "認識結果から「" + hits[0] + "」を検出";
+    ocrStat.textContent = "認識中...";
+    const { data } = await worker.recognize(canvas);
+    const raw = (data.text || "");
+    const store = matchStore(raw);             // あいまい一致
+    if(store){
+      setTarget(store);
+      ocrStat.textContent = "「" + store + "」を検出";
     }else{
-      ocrStat.textContent = "店名を自動検出できませんでした。手動で選択してください。\n[OCR結果] " + raw.slice(0,120);
+      ocrStat.textContent = "店名を自動検出できませんでした。手動選択してください。\n[OCR結果] " + raw.replace(/\s+/g," ").slice(0,150);
     }
   }catch(e){
     console.log(e);
-    ocrStat.textContent = "OCRに失敗しました。手動で選択してください。";
-  }finally{
-    ocrFile.value = "";
-  }
+    ocrStat.textContent = "OCRエラー: " + (e.message||e) + "\n手動で選択してください。";
+  }finally{ ocrFile.value=""; }
 });
+
+/* 画像前処理：小さければ拡大し、グレースケール＋コントラスト強調 */
+function preprocess(file){
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      let scale = 1;
+      if(img.width < 1000) scale = 1400 / img.width;       // 小さい写真は拡大
+      else if(img.width > 2000) scale = 2000 / img.width;  // 大きすぎる写真は縮小
+      const w = Math.round(img.width*scale), h = Math.round(img.height*scale);
+      const c = document.createElement("canvas"); c.width=w; c.height=h;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img,0,0,w,h);
+      const id = ctx.getImageData(0,0,w,h), d = id.data;
+      const contrast = 1.5;
+      for(let i=0;i<d.length;i+=4){
+        let g = 0.3*d[i]+0.59*d[i+1]+0.11*d[i+2];
+        g = (g-128)*contrast + 128;
+        g = g<0?0:(g>255?255:g);
+        d[i]=d[i+1]=d[i+2]=g;
+      }
+      ctx.putImageData(id,0,0);
+      URL.revokeObjectURL(img.src);
+      resolve(c);
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/* 店名照合：完全包含 → あいまい一致（部分列一致率） */
+function matchStore(rawText){
+  const clean = rawText.replace(/\s/g,"");
+  const exact = STORE_LIST.filter(s => clean.includes(s)).sort((a,b)=>b.length-a.length);
+  if(exact.length) return exact[0];
+  // あいまい：店名の文字が順番に何割含まれるか
+  let best=null, bestScore=0;
+  for(const s of STORE_LIST){
+    let i=0, found=0;
+    for(const ch of clean){ if(i<s.length && ch===s[i]){ i++; found++; } }
+    const score = found / s.length;
+    if(score > bestScore){ bestScore=score; best=s; }
+  }
+  return bestScore >= 0.7 ? best : null;   // 7割以上一致で採用
+}
 
 let ocrWorker = null;
 async function getWorker(){
   if(ocrWorker) return ocrWorker;
-  ocrWorker = await Tesseract.createWorker("jpn", 1, {
+  ocrWorker = await Tesseract.createWorker("jpn+eng", 1, {
     logger: m => { if(m.status==="recognizing text") ocrStat.textContent = "認識中... " + Math.round(m.progress*100) + "%"; }
   });
+  await ocrWorker.setParameters({ tessedit_pageseg_mode: "3" }); // 自動レイアウト解析
   return ocrWorker;
 }
 
-/* 手動選択 */
 manual.addEventListener("change", () => { if(manual.value) setTarget(manual.value); });
 
-/* 対象店舗を確定 → バーコードスキャン開始 */
 function setTarget(name){
   targetStore = name;
   targetEl.textContent = "対象店舗: " + name;
   overlay.style.display = "none";
   verdict.textContent = "―"; verdict.className = "";
-  scanInfo.textContent = "DP袋を映してください";
+  scanInfo.textContent = "DP袋を枠内に映してください";
   if(!scannerStarted) startScanner();
 }
 
 /* ===== STEP2: バーコード連続スキャン ===== */
 function startScanner(){
-  if(typeof Quagga === "undefined"){ scanInfo.textContent = "スキャナー未読込（通信環境を確認）。"; return; }
+  if(typeof Quagga === "undefined"){ scanInfo.textContent="スキャナー未読込（通信環境を確認）。"; return; }
   scannerStarted = true;
   Quagga.init({
-    inputStream:{ name:"Live", type:"LiveStream", target:document.querySelector("#scanner"),
-      constraints:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:720} } },
+    inputStream:{
+      name:"Live", type:"LiveStream", target:document.querySelector("#scanner"),
+      constraints:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:720} },
+      area:{ top:"35%", bottom:"35%", left:"8%", right:"8%" }   // 中央帯だけ処理＝高速化
+    },
     locator:{ patchSize:"medium", halfSample:true },
-    numOfWorkers: navigator.hardwareConcurrency || 2,
-    frequency:10,
+    numOfWorkers: navigator.hardwareConcurrency || 4,
+    /* frequency 指定なし＝毎フレーム処理（高速） */
     decoder:{ readers:[
-      "code_128_reader","code_39_reader","code_93_reader","ean_reader","ean_8_reader",
-      "upc_reader","upc_e_reader","codabar_reader","i2of5_reader"
+      "codabar_reader",    // DP袋（NW-7）。これが主。下2つは予備
+      "code_128_reader",
+      "code_39_reader"
     ]},
     locate:true
   }, function(err){
-    if(err){ console.log(err); scanInfo.textContent = "カメラを起動できません: " + (err.name||err.message||err); return; }
-    const v = document.querySelector("#scanner video");
+    if(err){ console.log(err); scanInfo.textContent="カメラを起動できません: " + (err.name||err.message||err); return; }
+    const v=document.querySelector("#scanner video");
     if(v){ v.setAttribute("playsinline","true"); v.setAttribute("muted","true"); }
     Quagga.start();
   });
@@ -206,25 +260,19 @@ function onDetected(data){
   const code = res && res.code;
   if(!code) return;
 
-  // 誤差チェック
   const codes = res.decodedCodes || [];
   const errs = codes.map(c=>c.error).filter(e=>typeof e==="number");
-  if(errs.length){ const avg = errs.reduce((a,b)=>a+b,0)/errs.length; if(avg>MAX_ERROR) return; }
+  if(errs.length){ const avg=errs.reduce((a,b)=>a+b,0)/errs.length; if(avg>MAX_ERROR) return; }
 
-  // 連続一致チェック
   if(code===lastCode){ matchCount++; } else { lastCode=code; matchCount=1; return; }
   if(matchCount<REQUIRED_MATCH) return;
 
-  // 確定 → 照合
-  const num = code.replace(/[^0-9]/g, "");
+  const num = code.replace(/[^0-9]/g,"");
   const bagStore = stores[num.slice(0,7)] || "店舗不明";
   const isMatch = (bagStore === targetStore);
 
-  if(isMatch){
-    verdict.textContent = "OK"; verdict.className = "ok"; feedbackOK();
-  }else{
-    verdict.textContent = "NG"; verdict.className = "ng"; feedbackNG();
-  }
+  if(isMatch){ verdict.textContent="OK"; verdict.className="ok pulse"; feedbackOK(); }
+  else       { verdict.textContent="NG"; verdict.className="ng pulse"; feedbackNG(); }
   scanInfo.textContent = "DP袋: " + bagStore + " / " + num;
   addLog(num, bagStore, isMatch);
 
@@ -233,25 +281,18 @@ function onDetected(data){
 }
 
 function addLog(num, bagStore, isMatch){
-  const li = document.createElement("li");
-  const left = document.createElement("span");
-  left.textContent = bagStore + " / " + num;
-  const tag = document.createElement("span");
-  tag.textContent = isMatch ? "OK" : "NG";
-  tag.className = isMatch ? "tag-ok" : "tag-ng";
+  const li=document.createElement("li");
+  const left=document.createElement("span"); left.textContent=bagStore+" / "+num;
+  const tag=document.createElement("span"); tag.textContent=isMatch?"OK":"NG"; tag.className=isMatch?"tag-ok":"tag-ng";
   li.appendChild(left); li.appendChild(tag);
   logEl.insertBefore(li, logEl.firstChild);
 }
 
-/* リセット（新しい宅配伝票へ） */
 document.getElementById("resetBtn").addEventListener("click", () => {
-  targetStore = null; lastCode=null; matchCount=0; scanned=false;
-  targetEl.textContent = "対象店舗: 未設定";
-  manual.value = "";
-  verdict.textContent = "―"; verdict.className = "";
-  overlay.style.display = "flex";
-  scanInfo.textContent = "待機中";
-  ocrStat.textContent = "";
+  targetStore=null; lastCode=null; matchCount=0; scanned=false;
+  targetEl.textContent="対象店舗: 未設定"; manual.value="";
+  verdict.textContent="―"; verdict.className="";
+  overlay.style.display="flex"; scanInfo.textContent="待機中"; ocrStat.textContent="";
 });
 </script>
 </body>
