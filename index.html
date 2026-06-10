@@ -106,28 +106,20 @@ Quagga.onDetected(async function(data){
 
     Quagga.stop();
 
-    try {
+    document.getElementById("result").innerHTML =
+`
+<h2>${storeName}</h2>
+<button id="copyBtn">コピー</button>
+`;
 
-        await navigator.clipboard.writeText(storeName);
+document.getElementById("copyBtn")
+.addEventListener("click", async () => {
 
-        document.getElementById("result").innerHTML =
-            `
-            ${storeName}
-            <br>
-            <small>クリップボードにコピーしました</small>
-            `;
+    await navigator.clipboard.writeText(storeName);
 
-    } catch(err) {
+    alert("コピーしました");
 
-        document.getElementById("result").innerHTML =
-            `
-            ${storeName}
-            <br>
-            <small>コピー失敗</small>
-            `;
-
-        console.error(err);
-    }
+});
 
 });
 </script>
