@@ -96,60 +96,20 @@ function startScanner(){
     });
 
 }
+Quagga.onProcessed(function(result){
 
+    if(result){
+
+        console.log("解析中");
+
+    }
+
+});
 Quagga.onDetected(function(data){
 
-    if(scanned) return;
+    alert(data.codeResult.code);
 
-    scanned = true;
-
-    const barcode = data.codeResult.code;
-
-    const storeCode = barcode.slice(0,7);
-
-    const storeName =
-        stores[storeCode] || "店舗不明";
-
-    Quagga.stop();
-
-    document.getElementById("result").innerHTML = `
-        <div>
-            <div>店舗名</div>
-            <h2>${storeName}</h2>
-
-            <div>読取値</div>
-            <p>${barcode}</p>
-
-            <button id="copyBtn">
-                店舗名をコピー
-            </button>
-        </div>
-    `;
-
-    document.getElementById("copyBtn")
-    .addEventListener("click", async () => {
-
-        try {
-
-            await navigator.clipboard.writeText(storeName);
-
-            alert(
-                storeName +
-                " をコピーしました"
-            );
-
-        } catch(err){
-
-            alert(
-                "コピー失敗\n\n" +
-                storeName
-            );
-
-            console.error(err);
-
-        }
-
-    });
+});
 
 });
 
