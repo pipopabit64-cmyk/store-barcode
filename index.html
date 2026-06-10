@@ -1,76 +1,127 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>Code128 Reader</title>
+<meta charset="UTF-8">
+<meta name="viewport"
+content="width=device-width,initial-scale=1">
+
+<title>店舗コード読取</title>
+
+<script src="https://unpkg.com/@ericblade/quagga2/dist/quagga.min.js"></script>
 
 <style>
+
 body{
-    font-family:sans-serif;
-    text-align:center;
+margin:0;
+font-family:sans-serif;
 }
 
-video{
-    width:100%;
-    max-width:600px;
+#scanner{
+width:100%;
+height:70vh;
 }
 
 #result{
-    margin-top:20px;
-    font-size:24px;
+font-size:32px;
+padding:20px;
 }
+
 </style>
 
 </head>
 
 <body>
 
-<h2>バーコード読取</h2>
-
-<video id="video" playsinline></video>
+<div id="scanner"></div>
 
 <div id="result">
-スキャン待機中...
+読み取り待機中...
 </div>
 
-<script type="module">
+<script>
 
-import {
- BrowserMultiFormatReader
-}
-from "https://cdn.jsdelivr.net/npm/@zxing/browser@latest/+esm";
+let stores = {};
 
-const codeReader = new BrowserMultiFormatReader();
+fetch("./stores.json")
+.then(r => r.json())
+.then(data => {
 
-await codeReader.decodeFromVideoDevice(
-  undefined,
-  "video",
-  (result, error) => {
+    stores = data;
 
-    if(result){
+    startScanner();
 
-      console.log(result.getText());
+});
 
-      document.getElementById("result").innerHTML =
-        result.getText();
+function startScanner(){
 
+Quagga.init({
+
+    inputStream:{
+        type:"LiveStream",
+        target:
+        document.querySelector("#scanner"),
+
+        constraints:{
+            facingMode:"environment"
+        }
+    },
+
+    decoder:{
+        readers:[
+            "code_128_reader"
+        ]
     }
 
-  }
-);
+},
+
+function(err){
+
+    if(err){
+
+        console.log(err);
+        return;
+    }
+
+    Quagga.start();
+});
 
 }
-catch(ex){
 
- document.getElementById("result")
-   .innerHTML =
-   ex.message;
+let scanned = false;
 
-}
+Quagga.onDetected(function(data){
+
+    if(scanned) return;
+
+    scanned = true;
+
+    const barcode =
+        data.codeResult.code;
+
+    const storeCode =
+        barcode.slice(0,7);
+
+    const storeName =
+        stores[storeCode] || "店舗不明";
+
+    document.getElementById("result")
+        .innerText = storeName;
+
+    Quagga.stop();
+
+    setTimeout(() => {
+
+        location.href =
+        "shortcuts://run-shortcut?name=店舗受信&input=text&text="
+        + encodeURIComponent(storeName);
+
+    },1000);
+
+});
 
 </script>
 
 </body>
+
 </html>
