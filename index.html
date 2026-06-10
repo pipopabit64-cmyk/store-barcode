@@ -1,127 +1,135 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
-
 <meta charset="UTF-8">
-<meta name="viewport"
-content="width=device-width,initial-scale=1">
-
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>店舗コード読取</title>
-
-<script src="https://unpkg.com/@ericblade/quagga2/dist/quagga.min.js"></script>
-
+<!-- バージョンを固定（最新指定だと読み込めない場合がある） -->
+<script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
 <style>
-
-body{
-margin:0;
-font-family:sans-serif;
-}
-
-#scanner{
-width:100%;
-height:70vh;
-}
-
-#result{
-font-size:32px;
-padding:20px;
-}
-
+  body{ margin:0; font-family:sans-serif; }
+  #scanner{
+    width:100%;
+    height:70vh;
+    background:#000;
+    position:relative;
+    overflow:hidden;
+  }
+  /* Quaggaが挿入するvideo/canvasをコンテナに収める */
+  #scanner video,
+  #scanner canvas{
+    width:100% !important;
+    height:100% !important;
+    object-fit:cover;
+  }
+  #result{
+    font-size:32px;
+    padding:20px;
+  }
+  .error{ color:#c00; font-size:20px; }
 </style>
-
 </head>
-
 <body>
-
 <div id="scanner"></div>
-
-<div id="result">
-読み取り待機中...
-</div>
+<div id="result">読み取り待機中...</div>
 
 <script>
+const resultEl = document.getElementById("result");
 
-let stores = {};
-
-fetch("./stores.json")
-.then(r => r.json())
-.then(data => {
-
-    stores = data;
-
-    startScanner();
-
-});
-
-function startScanner(){
-
-Quagga.init({
-
-    inputStream:{
-        type:"LiveStream",
-        target:
-        document.querySelector("#scanner"),
-
-        constraints:{
-            facingMode:"environment"
-        }
-    },
-
-    decoder:{
-        readers:[
-            "code_128_reader"
-        ]
-    }
-
-},
-
-function(err){
-
-    if(err){
-
-        console.log(err);
-        return;
-    }
-
-    Quagga.start();
-});
-
+function showMsg(text, isError){
+  resultEl.innerText = text;
+  resultEl.className = isError ? "error" : "";
 }
 
+let stores = {};
 let scanned = false;
 
-Quagga.onDetected(function(data){
+// HTTPSチェック（カメラはhttpsかlocalhostでないと起動しない）
+if(location.protocol !== "https:" && location.hostname !== "localhost"){
+  showMsg("カメラはhttps接続でないと起動しません。\nhttpsのURLで開いてください。", true);
+}
 
-    if(scanned) return;
+// Quaggaが読み込めているか確認
+if(typeof Quagga === "undefined"){
+  showMsg("スキャナーライブラリの読み込みに失敗しました（通信環境を確認）。", true);
+}
 
-    scanned = true;
+// stores.json を読み込む。失敗してもスキャナーは起動させる
+fetch("./stores.json")
+  .then(r => {
+    if(!r.ok) throw new Error("stores.json HTTP " + r.status);
+    return r.json();
+  })
+  .then(data => { stores = data; })
+  .catch(err => {
+    console.log("stores.json読み込み失敗:", err);
+    // 店舗名は不明になるが、スキャン自体は続行
+  })
+  .finally(() => {
+    if(typeof Quagga !== "undefined"){
+      startScanner();
+    }
+  });
 
-    const barcode =
-        data.codeResult.code;
+function startScanner(){
+  Quagga.init({
+    inputStream:{
+      name:"Live",
+      type:"LiveStream",
+      target: document.querySelector("#scanner"),
+      constraints:{
+        facingMode:"environment",
+        width:{ ideal:1280 },
+        height:{ ideal:720 }
+      }
+    },
+    locator:{ patchSize:"medium", halfSample:true },
+    numOfWorkers: navigator.hardwareConcurrency || 2,
+    frequency:10,
+    decoder:{ readers:["code_128_reader"] },
+    locate:true
+  },
+  function(err){
+    if(err){
+      console.log(err);
+      // カメラ起動失敗の原因を画面に表示
+      showMsg("カメラを起動できません: " + (err.name || err.message || err), true);
+      return;
+    }
+    // iOS対策：videoにplaysinlineを付与
+    const video = document.querySelector("#scanner video");
+    if(video){
+      video.setAttribute("playsinline", "true");
+      video.setAttribute("muted", "true");
+    }
+    Quagga.start();
+    showMsg("読み取り待機中...");
+  });
 
-    const storeCode =
-        barcode.slice(0,7);
+  // onDetected は init成功後に登録（Quagga読み込み前の登録を避ける）
+  Quagga.onDetected(onDetected);
+}
 
-    const storeName =
-        stores[storeCode] || "店舗不明";
+function onDetected(data){
+  if(scanned) return;
+  const barcode = data.codeResult.code;
+  if(!barcode) return;
 
-    document.getElementById("result")
-        .innerText = storeName;
+  scanned = true;
+  const storeCode = barcode.slice(0, 7);
+  const storeName = stores[storeCode] || "店舗不明";
 
-    Quagga.stop();
+  showMsg(storeName + "（" + barcode + "）");
 
-    setTimeout(() => {
+  Quagga.offDetected(onDetected);
+  Quagga.stop();
 
-        location.href =
-        "shortcuts://run-shortcut?name=店舗受信&input=text&text="
-        + encodeURIComponent(storeName);
-
-    },1000);
-
-});
-
+  setTimeout(() => {
+    location.href =
+      "shortcuts://run-shortcut?name=店舗受信&input=text&text="
+      + encodeURIComponent(storeName);
+  }, 1000);
+}
 </script>
-
 </body>
-
 </html>
