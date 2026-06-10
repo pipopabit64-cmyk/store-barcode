@@ -159,7 +159,8 @@ function onDetected(data){
   Quagga.stop();
 
   // テキストデータ（バーコードの生の文字列）
-  const text = barcode;
+  const raw = barcode;                        // 生の読み取り値（例: C153023200000C）
+  const text = raw.replace(/[^0-9]/g, "");    // 数字だけ抽出（例: 153023200000）
   const storeCode = text.slice(0, 7);
   const storeName = stores[storeCode] || "店舗不明";
 
