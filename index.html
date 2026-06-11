@@ -6,14 +6,14 @@
 <title>宅配伝票 × DP袋 照合</title>
 <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
 <style>
-  body{ margin:0; font-family:sans-serif; -webkit-text-size-adjust:100%; color:#222; }
+  body{ margin:0; font-family:sans-serif; -webkit-text-size-adjust:100%; color:#222; line-height:1.2; }
   .box{ padding:12px 14px; border-bottom:8px solid #f0f0f0; }
-  h2{ font-size:16px; margin:0 0 10px; color:#555; }
+  h2{ font-size:16px; margin:0 0 4px; color:#555; }
   button{ font-size:18px; padding:14px; border:none; border-radius:8px; color:#fff; }
   .btn-main{ background:#06c; width:100%; }
   .btn-sub{ background:#999; }
   select{ font-size:18px; padding:10px; width:100%; box-sizing:border-box; }
-  #target{ font-size:26px; font-weight:bold; margin:10px 0; }
+  #target{ font-size:18px; font-weight:bold; margin:2px 0 0; }
   #status{ font-size:14px; color:#888; white-space:pre-wrap; }
 
   #verdict{ font-size:44px; font-weight:bold; text-align:center; padding:8px 0; color:#bbb; line-height:1.1; }
@@ -44,7 +44,7 @@
   <h2>① 対象店舗を設定</h2>
   <div id="target">対象店舗: 未設定</div>
   <div id="status"></div>
-  <div style="margin-top:10px;">
+  <div style="margin-top:4px;">
     <span class="note">手動で選択：</span>
     <select id="manualSelect"><option value="">― 店舗を選択 ―</option></select>
   </div>
@@ -69,7 +69,7 @@
 /* ===== 店リスト ===== */
 const STORE_LIST = [
   "新宿西口","新宿東口","吉祥寺","さいたま新都心駅前","上野","Akiba",
-  "錦糸町","千葉","横浜","京急上大岡","川崎ルフロン","町田","八王子店",
+  "錦糸町","千葉","横浜","京急上大岡","川崎ルフロン","町田","八王子",
   "新潟駅前","仙台","札幌","郡山","宇都宮","梅田","京都","博多","甲府","池袋","サンシャインサカエ"
 ];
 
@@ -219,7 +219,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 });
 
 /* ===== iOSショートカット等からURLパラメータで対象店舗を受け取る =====
-   例: https://<ドメイン>/dp-verify.html?store=新宿西口本
+   例: https://<ドメイン>/dp-verify.html?store=新宿西口
    store でも text でも可。テキストを渡せば店リストと照合して判定する。 */
 (function initFromURL(){
   const params = new URLSearchParams(location.search);
