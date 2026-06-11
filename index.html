@@ -16,7 +16,7 @@
   #target{ font-size:26px; font-weight:bold; margin:10px 0; }
   #status{ font-size:14px; color:#888; white-space:pre-wrap; }
 
-  #verdict{ font-size:72px; font-weight:bold; text-align:center; padding:20px 0; color:#bbb; }
+  #verdict{ font-size:44px; font-weight:bold; text-align:center; padding:8px 0; color:#bbb; line-height:1.1; }
   #verdict.ok{ background:#0a0; color:#fff; }
   #verdict.ng{ background:#c00; color:#fff; }
   #verdict.pulse{ animation:pulse .35s ease-out; }
@@ -68,7 +68,7 @@
 <script>
 /* ===== 店リスト ===== */
 const STORE_LIST = [
-  "新宿西口","新宿東口","吉祥寺","さいたま新都心駅前","上野","Akiba",
+  "新宿西口本","新宿東口","吉祥寺","さいたま新都心駅前","上野","Akiba",
   "錦糸町","千葉","横浜","京急上大岡","川崎ルフロン","町田","八王子店",
   "新潟駅前","仙台","札幌","郡山","宇都宮","梅田","京都","博多","甲府","池袋"
 ];
@@ -219,7 +219,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 });
 
 /* ===== iOSショートカット等からURLパラメータで対象店舗を受け取る =====
-   例: https://<ドメイン>/dp-verify.html?store=新宿西口
+   例: https://<ドメイン>/dp-verify.html?store=新宿西口本
    store でも text でも可。テキストを渡せば店リストと照合して判定する。 */
 (function initFromURL(){
   const params = new URLSearchParams(location.search);
