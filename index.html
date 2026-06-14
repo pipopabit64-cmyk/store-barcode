@@ -385,7 +385,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   const params = new URLSearchParams(location.search);
   const incoming = params.get("store") || params.get("text");
   if(!incoming) return;
-  const store = matchStore(incoming);
+  const store = matchStoreOCR(incoming); // 東京都・横浜市を除外して照合（住所による誤検出を防ぐ）
   if(store){
     setTarget(store);
     statusEl.textContent = "ショートカットから「" + store + "」を受け取りました";
