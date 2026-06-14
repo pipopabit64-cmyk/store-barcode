@@ -208,7 +208,8 @@ ocrInput.addEventListener("change", () => {
   if(f) runOCR(f);
 });
 
-/* 画像前処理：拡大 → グレースケール → 二値化（Otsu）。OCR精度を大きく改善する */
+/* 画像前処理：拡大 → グレースケール → コントラスト伸張。
+   薄いグレー文字を濃く引き伸ばし、高精度LSTMが読みやすい形にする */
 async function preprocess(file){
   const img = await new Promise((res, rej) => {
     const im = new Image();
@@ -217,44 +218,53 @@ async function preprocess(file){
     im.src = URL.createObjectURL(file);
   });
 
-  // 長辺を1600px前後に正規化（小さすぎる画像は拡大、大きすぎる画像は縮小）
-  const target = 1600;
+  // 長辺を約2000pxに正規化（薄く小さい文字を拡大して解像度を確保）
+  const target = 2000;
   const scale = target / Math.max(img.width, img.height);
   const w = Math.round(img.width * scale);
   const h = Math.round(img.height * scale);
   const cv = document.createElement("canvas");
   cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(img, 0, 0, w, h);
   URL.revokeObjectURL(img.src);
 
   const imgData = ctx.getImageData(0, 0, w, h);
   const px = imgData.data;
+  const total = w * h;
 
   // グレースケール化＋ヒストグラム作成
+  // 輝度ではなく max(R,G,B)（HSVのValue）を使う。
+  // → 黒い印字だけ暗く残り、伝票のマゼンタ/赤などの色付き下地・罫線は明るく飛ぶ
   const hist = new Array(256).fill(0);
-  const gray = new Uint8ClampedArray(w * h);
+  const gray = new Uint8ClampedArray(total);
   for(let i = 0, p = 0; i < px.length; i += 4, p++){
-    const g = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+    let g = px[i];
+    if(px[i + 1] > g) g = px[i + 1];
+    if(px[i + 2] > g) g = px[i + 2];
     gray[p] = g; hist[g]++;
   }
 
-  // Otsu法でしきい値を自動決定
-  const total = w * h;
-  let sum = 0; for(let i = 0; i < 256; i++) sum += i * hist[i];
-  let sumB = 0, wB = 0, varMax = 0, threshold = 127;
-  for(let i = 0; i < 256; i++){
-    wB += hist[i]; if(wB === 0) continue;
-    const wF = total - wB; if(wF === 0) break;
-    sumB += i * hist[i];
-    const mB = sumB / wB, mF = (sum - sumB) / wF;
-    const between = wB * wF * (mB - mF) * (mB - mF);
-    if(between > varMax){ varMax = between; threshold = i; }
-  }
+  // 上下2%点を黒/白の基準にしてコントラストを伸張（グレア・退色に強い）
+  const cut = total * 0.02;
+  let acc = 0, lo = 0, hi = 255;
+  for(let i = 0; i < 256; i++){ acc += hist[i]; if(acc >= cut){ lo = i; break; } }
+  acc = 0;
+  for(let i = 255; i >= 0; i--){ acc += hist[i]; if(acc >= cut){ hi = i; break; } }
+  const range = Math.max(1, hi - lo);
 
-  // 二値化して書き戻す
+  // ルックアップテーブルで伸張＋わずかにガンマを掛けて薄い文字を強調
+  const lut = new Uint8ClampedArray(256);
+  for(let i = 0; i < 256; i++){
+    let v = (i - lo) / range;        // 0〜1に正規化
+    v = Math.min(1, Math.max(0, v));
+    v = Math.pow(v, 1.2);            // ガンマ>1で中間調を暗く＝薄文字を濃く
+    lut[i] = (v * 255) | 0;
+  }
   for(let i = 0, p = 0; i < px.length; i += 4, p++){
-    const v = gray[p] > threshold ? 255 : 0;
+    const v = lut[gray[p]];
     px[i] = px[i + 1] = px[i + 2] = v; px[i + 3] = 255;
   }
   ctx.putImageData(imgData, 0, 0);
@@ -264,9 +274,13 @@ async function preprocess(file){
 let ocrWorker = null;
 async function getWorker(){
   if(ocrWorker) return ocrWorker;
-  ocrWorker = await Tesseract.createWorker("jpn");
+  // 高精度モデル(tessdata_best) + LSTMエンジンで日本語精度を上げる
+  ocrWorker = await Tesseract.createWorker("jpn", 1, {
+    langPath: "https://tessdata.projectnaptha.com/4.0.0_best",
+    gzip: true
+  });
   await ocrWorker.setParameters({
-    tessedit_pageseg_mode: "6",       // 1つのまとまったテキストブロックとして扱う
+    tessedit_pageseg_mode: "3",       // ページ自動解析（複数の行・領域が混在する伝票向け）
     preserve_interword_spaces: "1"
   });
   return ocrWorker;
