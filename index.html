@@ -157,12 +157,48 @@ function ocrStoreNames(){
   return [...new Set(STORE_LIST)].sort((a,b) => b.length - a.length); // 長い店名を優先
 }
 
-/* OCRテキストから店名を判定（無視語を除去 → stores.json の店名が含まれていれば採用） */
-function matchStoreOCR(rawText){
-  let t = rawText.replace(/\s/g, "");
+/* OCRテキストの正規化（空白・記号除去 → 無視語除去） */
+function normalizeOCR(rawText){
+  let t = (rawText || "")
+    .replace(/[\s　]/g, "")        // 半角/全角スペース・改行
+    .replace(/[^　-ヿ一-龯A-Za-z0-9]/g, ""); // OCRノイズ記号を除去
   OCR_IGNORE.forEach(w => { t = t.split(w).join(""); });
-  const hit = ocrStoreNames().filter(n => t.includes(n));
-  return hit.length ? hit[0] : null;
+  return t;
+}
+
+/* 店名 s が text 内にどれだけ一致するか（同じ位置揃えで最も一致する窓のスコア 0〜1） */
+function windowScore(text, s){
+  if(text.length < s.length){
+    let m = 0;
+    for(let i = 0; i < text.length; i++) if(text[i] === s[i]) m++;
+    return m / s.length;
+  }
+  let best = 0;
+  for(let i = 0; i <= text.length - s.length; i++){
+    let m = 0;
+    for(let j = 0; j < s.length; j++) if(text[i + j] === s[j]) m++;
+    const r = m / s.length;
+    if(r > best){ best = r; if(best === 1) break; }
+  }
+  return best;
+}
+
+/* OCRテキストから店名を判定：①完全包含 → ②あいまい一致（誤読を許容） */
+function matchStoreOCR(rawText){
+  const t = normalizeOCR(rawText);
+  const names = ocrStoreNames();
+
+  // ① 完全に含まれていれば最優先（長い店名を優先）
+  const exact = names.filter(n => t.includes(n));
+  if(exact.length) return exact[0];
+
+  // ② あいまい一致：誤読を1〜2文字許容。短い店名ほど厳しく（しきい値0.6）
+  let best = null, bestScore = 0;
+  for(const n of names){
+    const sc = windowScore(t, n);
+    if(sc > bestScore){ bestScore = sc; best = n; }
+  }
+  return bestScore >= 0.6 ? best : null;
 }
 
 ocrBtn.addEventListener("click", () => ocrInput.click());
@@ -172,12 +208,78 @@ ocrInput.addEventListener("change", () => {
   if(f) runOCR(f);
 });
 
+/* 画像前処理：拡大 → グレースケール → 二値化（Otsu）。OCR精度を大きく改善する */
+async function preprocess(file){
+  const img = await new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = URL.createObjectURL(file);
+  });
+
+  // 長辺を1600px前後に正規化（小さすぎる画像は拡大、大きすぎる画像は縮小）
+  const target = 1600;
+  const scale = target / Math.max(img.width, img.height);
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d");
+  ctx.drawImage(img, 0, 0, w, h);
+  URL.revokeObjectURL(img.src);
+
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const px = imgData.data;
+
+  // グレースケール化＋ヒストグラム作成
+  const hist = new Array(256).fill(0);
+  const gray = new Uint8ClampedArray(w * h);
+  for(let i = 0, p = 0; i < px.length; i += 4, p++){
+    const g = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
+    gray[p] = g; hist[g]++;
+  }
+
+  // Otsu法でしきい値を自動決定
+  const total = w * h;
+  let sum = 0; for(let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, varMax = 0, threshold = 127;
+  for(let i = 0; i < 256; i++){
+    wB += hist[i]; if(wB === 0) continue;
+    const wF = total - wB; if(wF === 0) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if(between > varMax){ varMax = between; threshold = i; }
+  }
+
+  // 二値化して書き戻す
+  for(let i = 0, p = 0; i < px.length; i += 4, p++){
+    const v = gray[p] > threshold ? 255 : 0;
+    px[i] = px[i + 1] = px[i + 2] = v; px[i + 3] = 255;
+  }
+  ctx.putImageData(imgData, 0, 0);
+  return cv;
+}
+
+let ocrWorker = null;
+async function getWorker(){
+  if(ocrWorker) return ocrWorker;
+  ocrWorker = await Tesseract.createWorker("jpn");
+  await ocrWorker.setParameters({
+    tessedit_pageseg_mode: "6",       // 1つのまとまったテキストブロックとして扱う
+    preserve_interword_spaces: "1"
+  });
+  return ocrWorker;
+}
+
 async function runOCR(file){
   if(typeof Tesseract === "undefined"){ ocrStat.textContent = "OCR未読込（通信環境を確認してください）。"; return; }
   ocrBtn.disabled = true;
   ocrStat.textContent = "画像を解析中…（初回は日本語辞書のダウンロードに時間がかかります）";
   try{
-    const { data } = await Tesseract.recognize(file, "jpn");
+    const canvas = await preprocess(file);
+    const worker = await getWorker();
+    const { data } = await worker.recognize(canvas);
     const text = (data && data.text) || "";
     const store = matchStoreOCR(text);
     if(store){
