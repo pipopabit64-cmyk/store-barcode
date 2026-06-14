@@ -5,24 +5,25 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>宅配伝票 × DP袋 照合</title>
 <script src="https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.4/dist/quagga.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <style>
   body{ margin:0; font-family:sans-serif; -webkit-text-size-adjust:100%; color:#222; line-height:1.2; }
-  .box{ padding:12px 14px; border-bottom:8px solid #f0f0f0; }
-  h2{ font-size:16px; margin:0 0 4px; color:#555; }
-  button{ font-size:18px; padding:14px; border:none; border-radius:8px; color:#fff; }
+  .box{ padding:10px 14px; border-bottom:6px solid #f0f0f0; }
+  h2{ font-size:13px; margin:0 0 4px; color:#555; }
+  button{ font-size:17px; padding:12px 14px; border:none; border-radius:8px; color:#fff; }
   .btn-main{ background:#06c; width:100%; }
   .btn-sub{ background:#999; }
-  select{ font-size:18px; padding:10px; width:100%; box-sizing:border-box; }
-  #target{ font-size:18px; font-weight:bold; margin:2px 0 0; }
-  #status{ font-size:14px; color:#888; white-space:pre-wrap; }
+  select{ font-size:17px; padding:8px; width:100%; box-sizing:border-box; }
+  #target{ font-size:20px; font-weight:bold; margin:2px 0 6px; }
+  #status{ font-size:13px; color:#888; white-space:pre-wrap; }
 
-  #verdict{ font-size:44px; font-weight:bold; text-align:center; padding:8px 0; color:#bbb; line-height:1.1; }
+  #verdict{ font-size:38px; font-weight:bold; text-align:center; padding:6px 0; color:#bbb; line-height:1.1; }
   #verdict.ok{ background:#0a0; color:#fff; }
   #verdict.ng{ background:#c00; color:#fff; }
   #verdict.pulse{ animation:pulse .35s ease-out; }
   @keyframes pulse{ 0%{ transform:scale(1.25);} 100%{ transform:scale(1);} }
 
-  #scanner{ width:100%; height:42vh; background:#000; position:relative; overflow:hidden; }
+  #scanner{ width:100%; height:36vh; background:#000; position:relative; overflow:hidden; }
   #scanner video, #scanner canvas{ width:100% !important; height:100% !important; object-fit:cover; }
   #guide{ position:absolute; left:8%; right:8%; top:35%; bottom:35%;
     border:3px solid rgba(255,255,255,.8); border-radius:8px; z-index:4; pointer-events:none; }
@@ -44,7 +45,12 @@
   <h2>① 対象店舗を設定</h2>
   <div id="target">対象店舗: 未設定</div>
   <div id="status"></div>
-  <div style="margin-top:4px;">
+  <div style="margin-top:8px;">
+    <button class="btn-main" id="ocrBtn">📷 伝票を撮影して店舗を判定（OCR）</button>
+    <input type="file" id="ocrInput" accept="image/*" capture="environment" style="display:none">
+    <div id="ocrStatus" class="note" style="margin-top:6px; white-space:pre-wrap;"></div>
+  </div>
+  <div style="margin-top:8px;">
     <span class="note">手動で選択：</span>
     <select id="manualSelect"><option value="">― 店舗を選択 ―</option></select>
   </div>
@@ -76,6 +82,9 @@ const STORE_LIST = [
 const targetEl = document.getElementById("target");
 const statusEl = document.getElementById("status");
 const manual   = document.getElementById("manualSelect");
+const ocrBtn   = document.getElementById("ocrBtn");
+const ocrInput = document.getElementById("ocrInput");
+const ocrStat  = document.getElementById("ocrStatus");
 const verdict  = document.getElementById("verdict");
 const overlay  = document.getElementById("overlay");
 const flashEl  = document.getElementById("flash");
@@ -135,6 +144,55 @@ function matchStore(rawText){
     if(score > bestScore){ bestScore=score; best=s; }
   }
   return bestScore >= 0.7 ? best : null;
+}
+
+/* ===== STEP1: OCR（伝票を撮影して日本語スキャン → 店名照合） ===== */
+/* 認識しない語：住所による誤検出を防ぐ
+   「東京都」→ 店名「京都」への誤マッチを防止
+   「横浜市」→ 店名「横浜」への誤マッチを防止 */
+const OCR_IGNORE = ["東京都", "横浜市"];
+
+/* 照合対象の店名一覧（手動選択と同じ STORE_LIST に限定） */
+function ocrStoreNames(){
+  return [...new Set(STORE_LIST)].sort((a,b) => b.length - a.length); // 長い店名を優先
+}
+
+/* OCRテキストから店名を判定（無視語を除去 → stores.json の店名が含まれていれば採用） */
+function matchStoreOCR(rawText){
+  let t = rawText.replace(/\s/g, "");
+  OCR_IGNORE.forEach(w => { t = t.split(w).join(""); });
+  const hit = ocrStoreNames().filter(n => t.includes(n));
+  return hit.length ? hit[0] : null;
+}
+
+ocrBtn.addEventListener("click", () => ocrInput.click());
+ocrInput.addEventListener("change", () => {
+  const f = ocrInput.files && ocrInput.files[0];
+  ocrInput.value = ""; // 同じ画像を再選択できるようにクリア
+  if(f) runOCR(f);
+});
+
+async function runOCR(file){
+  if(typeof Tesseract === "undefined"){ ocrStat.textContent = "OCR未読込（通信環境を確認してください）。"; return; }
+  ocrBtn.disabled = true;
+  ocrStat.textContent = "画像を解析中…（初回は日本語辞書のダウンロードに時間がかかります）";
+  try{
+    const { data } = await Tesseract.recognize(file, "jpn");
+    const text = (data && data.text) || "";
+    const store = matchStoreOCR(text);
+    if(store){
+      setTarget(store);
+      statusEl.textContent = "伝票OCRから「" + store + "」を受け取りました";
+      ocrStat.textContent = "検出: " + store;
+    }else{
+      ocrStat.textContent = "店名を判定できませんでした。手動で選択してください。\n[読取] "
+        + text.replace(/\s+/g, " ").trim().slice(0, 150);
+    }
+  }catch(e){
+    ocrStat.textContent = "OCRに失敗しました: " + (e.message || e);
+  }finally{
+    ocrBtn.disabled = false;
+  }
 }
 
 /* 手動選択 */
