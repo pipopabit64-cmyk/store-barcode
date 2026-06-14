@@ -36,16 +36,6 @@
   .tag-ok{ color:#0a0; font-weight:bold; }
   .tag-ng{ color:#c00; font-weight:bold; }
   .note{ font-size:13px; color:#999; }
-
-  #ocrCrop{ display:none; position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.92); flex-direction:column; }
-  #ocrCrop.on{ display:flex; }
-  #ocrCropMsg{ color:#fff; font-size:14px; text-align:center; padding:10px; }
-  #ocrCanvasWrap{ flex:1; position:relative; overflow:hidden; touch-action:none; }
-  #ocrCanvas{ position:absolute; left:0; top:0; }
-  #ocrSel{ position:absolute; display:none; border:2px solid #0f0; background:rgba(0,255,0,.12); pointer-events:none; }
-  #ocrCropBtns{ display:flex; gap:8px; padding:10px; }
-  #ocrCropBtns .btn-sub{ flex:1; }
-  #ocrCropBtns .btn-main{ flex:2; }
 </style>
 </head>
 <body>
@@ -81,19 +71,6 @@
 
 <ul id="log"></ul>
 
-<!-- OCR: 撮影画像から店名の範囲を切り出す -->
-<div id="ocrCrop">
-  <div id="ocrCropMsg">店名（○○店）を指でなぞって枠で囲み、［この範囲を読み取る］</div>
-  <div id="ocrCanvasWrap">
-    <canvas id="ocrCanvas"></canvas>
-    <div id="ocrSel"></div>
-  </div>
-  <div id="ocrCropBtns">
-    <button class="btn-sub" id="ocrCancel">キャンセル</button>
-    <button class="btn-main" id="ocrRun">この範囲を読み取る</button>
-  </div>
-</div>
-
 <script>
 /* ===== 店リスト ===== */
 const STORE_LIST = [
@@ -108,12 +85,6 @@ const manual   = document.getElementById("manualSelect");
 const ocrBtn   = document.getElementById("ocrBtn");
 const ocrInput = document.getElementById("ocrInput");
 const ocrStat  = document.getElementById("ocrStatus");
-const ocrCrop  = document.getElementById("ocrCrop");
-const ocrCanvas= document.getElementById("ocrCanvas");
-const ocrWrap  = document.getElementById("ocrCanvasWrap");
-const ocrSel   = document.getElementById("ocrSel");
-const ocrCancel= document.getElementById("ocrCancel");
-const ocrRun   = document.getElementById("ocrRun");
 const verdict  = document.getElementById("verdict");
 const overlay  = document.getElementById("overlay");
 const flashEl  = document.getElementById("flash");
@@ -230,132 +201,60 @@ function matchStoreOCR(rawText){
   return bestScore >= 0.6 ? best : null;
 }
 
-/* ===== 撮影 → 店名範囲の切り出し ===== */
-let selImg = null, viewScale = 1, canvasLeft = 0, canvasTop = 0;
-let selRect = null, dragging = false, startX = 0, startY = 0;
-
 ocrBtn.addEventListener("click", () => ocrInput.click());
 ocrInput.addEventListener("change", () => {
   const f = ocrInput.files && ocrInput.files[0];
   ocrInput.value = ""; // 同じ画像を再選択できるようにクリア
-  if(f) openCrop(f);
+  if(f) runOCR(f);
 });
 
-function openCrop(file){
-  const im = new Image();
-  im.onload = () => { selImg = im; ocrCrop.classList.add("on"); layoutCanvas(); clearSel(); };
-  im.onerror = () => { ocrStat.textContent = "画像を読み込めませんでした"; };
-  im.src = URL.createObjectURL(file);
-}
+/* 画像前処理：拡大 → グレースケール → 二値化（Otsu）。OCR精度を大きく改善する */
+async function preprocess(file){
+  const img = await new Promise((res, rej) => {
+    const im = new Image();
+    im.onload = () => res(im);
+    im.onerror = rej;
+    im.src = URL.createObjectURL(file);
+  });
 
-function layoutCanvas(){
-  const availW = ocrWrap.clientWidth, availH = ocrWrap.clientHeight;
-  viewScale = Math.min(availW / selImg.naturalWidth, availH / selImg.naturalHeight);
-  const cw = Math.round(selImg.naturalWidth * viewScale);
-  const ch = Math.round(selImg.naturalHeight * viewScale);
-  ocrCanvas.width = cw; ocrCanvas.height = ch;
-  canvasLeft = Math.round((availW - cw) / 2);
-  canvasTop  = Math.round((availH - ch) / 2);
-  ocrCanvas.style.left = canvasLeft + "px";
-  ocrCanvas.style.top  = canvasTop + "px";
-  ocrCanvas.getContext("2d").drawImage(selImg, 0, 0, cw, ch);
-}
-
-function clearSel(){ selRect = null; ocrSel.style.display = "none"; }
-function updateSel(x1, y1, x2, y2){
-  const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
-  selRect = { x, y, w, h };
-  ocrSel.style.display = "block";
-  ocrSel.style.left = x + "px"; ocrSel.style.top = y + "px";
-  ocrSel.style.width = w + "px"; ocrSel.style.height = h + "px";
-}
-
-ocrWrap.addEventListener("pointerdown", e => {
-  dragging = true; ocrWrap.setPointerCapture(e.pointerId);
-  const r = ocrWrap.getBoundingClientRect();
-  startX = e.clientX - r.left; startY = e.clientY - r.top;
-  updateSel(startX, startY, startX, startY);
-});
-ocrWrap.addEventListener("pointermove", e => {
-  if(!dragging) return;
-  const r = ocrWrap.getBoundingClientRect();
-  updateSel(startX, startY, e.clientX - r.left, e.clientY - r.top);
-});
-ocrWrap.addEventListener("pointerup", () => { dragging = false; });
-
-ocrCancel.addEventListener("click", closeCrop);
-function closeCrop(){
-  ocrCrop.classList.remove("on");
-  if(selImg){ URL.revokeObjectURL(selImg.src); }
-}
-
-ocrRun.addEventListener("click", () => {
-  if(!selImg) return;
-  let sx, sy, sw, sh;
-  if(selRect && selRect.w > 8 && selRect.h > 8){
-    // 枠（表示座標）→ 元画像座標に変換
-    sx = Math.max(0, (selRect.x - canvasLeft) / viewScale);
-    sy = Math.max(0, (selRect.y - canvasTop) / viewScale);
-    sw = Math.min(selImg.naturalWidth - sx, selRect.w / viewScale);
-    sh = Math.min(selImg.naturalHeight - sy, selRect.h / viewScale);
-  }else{
-    sx = 0; sy = 0; sw = selImg.naturalWidth; sh = selImg.naturalHeight; // 未選択なら全体
-  }
-  if(sw < 4 || sh < 4){ ocrStat.textContent = "範囲が小さすぎます"; return; }
-
-  // 切り出した範囲を元解像度でクロップ
-  const crop = document.createElement("canvas");
-  crop.width = Math.round(sw); crop.height = Math.round(sh);
-  crop.getContext("2d").drawImage(selImg, sx, sy, sw, sh, 0, 0, crop.width, crop.height);
-  closeCrop();
-  recognizeStore(crop, crop.width, crop.height);
-});
-
-/* 画像前処理：拡大 → グレースケール → コントラスト伸張。
-   薄いグレー文字を濃く引き伸ばし、高精度LSTMが読みやすい形にする */
-function preprocess(src, sw, sh){
-  // 長辺を約2000pxに正規化（切り出した店名を拡大して解像度を確保）
-  const target = 2000;
-  const scale = target / Math.max(sw, sh);
-  const w = Math.max(1, Math.round(sw * scale));
-  const h = Math.max(1, Math.round(sh * scale));
+  // 長辺を1600px前後に正規化（小さすぎる画像は拡大、大きすぎる画像は縮小）
+  const target = 1600;
+  const scale = target / Math.max(img.width, img.height);
+  const w = Math.round(img.width * scale);
+  const h = Math.round(img.height * scale);
   const cv = document.createElement("canvas");
   cv.width = w; cv.height = h;
   const ctx = cv.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  ctx.drawImage(src, 0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  URL.revokeObjectURL(img.src);
 
   const imgData = ctx.getImageData(0, 0, w, h);
   const px = imgData.data;
-  const total = w * h;
 
-  // グレースケール化＋ヒストグラム作成（輝度）
+  // グレースケール化＋ヒストグラム作成
   const hist = new Array(256).fill(0);
-  const gray = new Uint8ClampedArray(total);
+  const gray = new Uint8ClampedArray(w * h);
   for(let i = 0, p = 0; i < px.length; i += 4, p++){
     const g = (px[i] * 0.299 + px[i + 1] * 0.587 + px[i + 2] * 0.114) | 0;
     gray[p] = g; hist[g]++;
   }
 
-  // 上下2%点を黒/白の基準にしてコントラストを伸張（グレア・退色に強い）
-  const cut = total * 0.02;
-  let acc = 0, lo = 0, hi = 255;
-  for(let i = 0; i < 256; i++){ acc += hist[i]; if(acc >= cut){ lo = i; break; } }
-  acc = 0;
-  for(let i = 255; i >= 0; i--){ acc += hist[i]; if(acc >= cut){ hi = i; break; } }
-  const range = Math.max(1, hi - lo);
-
-  // ルックアップテーブルで伸張＋わずかにガンマを掛けて薄い文字を強調
-  const lut = new Uint8ClampedArray(256);
+  // Otsu法でしきい値を自動決定
+  const total = w * h;
+  let sum = 0; for(let i = 0; i < 256; i++) sum += i * hist[i];
+  let sumB = 0, wB = 0, varMax = 0, threshold = 127;
   for(let i = 0; i < 256; i++){
-    let v = (i - lo) / range;        // 0〜1に正規化
-    v = Math.min(1, Math.max(0, v));
-    v = Math.pow(v, 1.2);            // ガンマ>1で中間調を暗く＝薄文字を濃く
-    lut[i] = (v * 255) | 0;
+    wB += hist[i]; if(wB === 0) continue;
+    const wF = total - wB; if(wF === 0) break;
+    sumB += i * hist[i];
+    const mB = sumB / wB, mF = (sum - sumB) / wF;
+    const between = wB * wF * (mB - mF) * (mB - mF);
+    if(between > varMax){ varMax = between; threshold = i; }
   }
+
+  // 二値化して書き戻す
   for(let i = 0, p = 0; i < px.length; i += 4, p++){
-    const v = lut[gray[p]];
+    const v = gray[p] > threshold ? 255 : 0;
     px[i] = px[i + 1] = px[i + 2] = v; px[i + 3] = 255;
   }
   ctx.putImageData(imgData, 0, 0);
@@ -365,24 +264,20 @@ function preprocess(src, sw, sh){
 let ocrWorker = null;
 async function getWorker(){
   if(ocrWorker) return ocrWorker;
-  // 高精度モデル(tessdata_best) + LSTMエンジンで日本語精度を上げる
-  ocrWorker = await Tesseract.createWorker("jpn", 1, {
-    langPath: "https://tessdata.projectnaptha.com/4.0.0_best",
-    gzip: true
-  });
+  ocrWorker = await Tesseract.createWorker("jpn");
   await ocrWorker.setParameters({
-    tessedit_pageseg_mode: "6",       // 切り出した店名を1つのテキストブロックとして読む
+    tessedit_pageseg_mode: "6",       // 1つのまとまったテキストブロックとして扱う
     preserve_interword_spaces: "1"
   });
   return ocrWorker;
 }
 
-async function recognizeStore(src, sw, sh){
+async function runOCR(file){
   if(typeof Tesseract === "undefined"){ ocrStat.textContent = "OCR未読込（通信環境を確認してください）。"; return; }
   ocrBtn.disabled = true;
   ocrStat.textContent = "画像を解析中…（初回は日本語辞書のダウンロードに時間がかかります）";
   try{
-    const canvas = preprocess(src, sw, sh);
+    const canvas = await preprocess(file);
     const worker = await getWorker();
     const { data } = await worker.recognize(canvas);
     const text = (data && data.text) || "";
