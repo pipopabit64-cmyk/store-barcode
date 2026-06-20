@@ -103,7 +103,8 @@ STORE_LIST.forEach(s => { const o=document.createElement("option"); o.value=s; o
 fetch("./stores.json")
   .then(r => { if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
   .then(d => { stores = d; })
-  .catch(e => console.log("stores.json読み込み失敗:", e));
+  .catch(e => console.log("stores.json読み込み失敗:", e))
+  .finally(() => { initFromURL(); }); // stores読込後にURLパラメータを判定（郵便番号照合に必要）
 
 /* ===== 音 ===== */
 let audioCtx = null;
@@ -412,13 +413,29 @@ document.getElementById("resetBtn").addEventListener("click", () => {
 });
 
 /* ===== iOSショートカット等からURLパラメータで対象店舗を受け取る =====
-   例: https://<ドメイン>/dp-verify.html?store=新宿西口
-   store でも text でも可。テキストを渡せば店リストと照合して判定する。 */
-(function initFromURL(){
+   ・郵便番号で指定: ?postal=160-0022 （zip でも可。ハイフン有無は問わない）
+   ・店名で指定:     ?store=新宿西口
+   ・任意テキスト:   ?text=...（郵便番号→店名の順で照合）
+   stores.json の読み込み完了を待ってから判定する（郵便番号照合に必要）。 */
+function initFromURL(){
   const params = new URLSearchParams(location.search);
+
+  // ① 郵便番号パラメータ（最優先）：対応する店舗があれば設定
+  const postal = params.get("postal") || params.get("zip");
+  if(postal){
+    const store = matchStoreByPostal(postal);
+    if(store){
+      setTarget(store);
+      statusEl.textContent = "ショートカットから郵便番号「" + postal + "」→「" + store + "」を設定しました";
+    }else{
+      statusEl.textContent = "受け取った郵便番号に対応する店舗が見つかりません。手動選択してください。\n[郵便番号] " + postal;
+    }
+    return;
+  }
+
+  // ② 店名／任意テキスト：郵便番号を含めば最優先、なければ店名照合
   const incoming = params.get("store") || params.get("text");
   if(!incoming) return;
-  // 郵便番号が含まれていれば最優先、なければ店名照合（東京都・横浜市を除外）
   const store = matchStoreByPostal(incoming) || matchStoreOCR(incoming);
   if(store){
     setTarget(store);
@@ -426,7 +443,7 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   }else{
     statusEl.textContent = "受け取ったテキストから店名を判定できませんでした。手動選択してください。\n[内容] " + incoming.replace(/\s+/g," ").slice(0,150);
   }
-})();
+}
 </script>
 </body>
 </html>
