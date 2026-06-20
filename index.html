@@ -183,6 +183,35 @@ function windowScore(text, s){
   return best;
 }
 
+/* ===== 郵便番号による店舗判定 =====
+   stores.json の postalCode から「数字7桁 → 店名」の逆引きを作成。
+   ハイフン・空白・〒などの記号は一切見ないので、ハイフンのOCR読み取りに
+   失敗しても判定に影響しない。 */
+function buildPostalIndex(){
+  const idx = {};
+  for(const id in stores){
+    const rec = stores[id];
+    const pc = rec && rec.postalCode;
+    if(!pc) continue;                       // 郵便番号未設定の店舗はスキップ
+    const key = String(pc).replace(/\D/g, ""); // 数字以外（ハイフン等）を除去
+    if(key.length === 7 && !idx[key]) idx[key] = rec.name;
+  }
+  return idx;
+}
+
+/* OCRテキスト中に既知の郵便番号（数字7桁）が含まれていれば、その店舗名を返す。
+   テキストから数字以外をすべて除去して照合するため、ハイフンの欠落・誤読の
+   影響を受けない。 */
+function matchStoreByPostal(rawText){
+  const digits = (rawText || "").replace(/\D/g, ""); // ハイフン・空白・〒等を無視
+  if(digits.length < 7) return null;
+  const idx = buildPostalIndex();
+  for(const key in idx){
+    if(digits.includes(key)) return idx[key];
+  }
+  return null;
+}
+
 /* OCRテキストから店名を判定：①完全包含 → ②あいまい一致（誤読を許容） */
 function matchStoreOCR(rawText){
   const t = normalizeOCR(rawText);
@@ -281,11 +310,14 @@ async function runOCR(file){
     const worker = await getWorker();
     const { data } = await worker.recognize(canvas);
     const text = (data && data.text) || "";
-    const store = matchStoreOCR(text);
+    // ① 郵便番号で判定（最優先・最も確実） → ② 店名照合にフォールバック
+    const byPostal = matchStoreByPostal(text);
+    const store = byPostal || matchStoreOCR(text);
     if(store){
       setTarget(store);
-      statusEl.textContent = "伝票OCRから「" + store + "」を受け取りました";
-      ocrStat.textContent = "検出: " + store;
+      const how = byPostal ? "郵便番号" : "店名";
+      statusEl.textContent = "伝票OCR（" + how + "）から「" + store + "」を受け取りました";
+      ocrStat.textContent = "検出: " + store + "（" + how + "で判定）";
     }else{
       ocrStat.textContent = "店名を判定できませんでした。手動で選択してください。\n[読取] "
         + text.replace(/\s+/g, " ").trim().slice(0, 150);
@@ -351,7 +383,8 @@ function onDetected(data){
   if(matchCount<REQUIRED_MATCH) return;
 
   const num = code.replace(/[^0-9]/g,"");
-  const bagStore = stores[num.slice(0,7)] || "店舗不明";
+  const rec = stores[num.slice(0,7)];
+  const bagStore = (rec && rec.name) || "店舗不明";
   const isMatch = (bagStore === targetStore);
 
   if(isMatch){ verdict.textContent="OK"; verdict.className="ok pulse"; feedbackOK(); }
@@ -385,7 +418,8 @@ document.getElementById("resetBtn").addEventListener("click", () => {
   const params = new URLSearchParams(location.search);
   const incoming = params.get("store") || params.get("text");
   if(!incoming) return;
-  const store = matchStoreOCR(incoming); // 東京都・横浜市を除外して照合（住所による誤検出を防ぐ）
+  // 郵便番号が含まれていれば最優先、なければ店名照合（東京都・横浜市を除外）
+  const store = matchStoreByPostal(incoming) || matchStoreOCR(incoming);
   if(store){
     setTarget(store);
     statusEl.textContent = "ショートカットから「" + store + "」を受け取りました";
